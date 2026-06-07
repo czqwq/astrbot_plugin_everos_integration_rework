@@ -19,6 +19,7 @@ class EverOSMemorizeTool:
         self._client = client
         self._config = config
         self.active = True
+        self.handler = self.__call__
 
     @property
     def name(self) -> str:
@@ -94,6 +95,7 @@ class EverOSRecallTool:
         self._client = client
         self._config = config
         self.active = True
+        self.handler = self.__call__
 
     @property
     def name(self) -> str:

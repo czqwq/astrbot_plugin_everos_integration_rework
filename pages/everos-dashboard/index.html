@@ -202,6 +202,7 @@
     <div class="filter-bar">
       <button class="filter-btn active" data-filter="all">全部 <span class="filter-count" id="f-all"></span></button>
       <button class="filter-btn" data-filter="episode">Episodes <span class="filter-count" id="f-episode"></span></button>
+      <button class="filter-btn" data-filter="profile">Profiles <span class="filter-count" id="f-profile"></span></button>
       <button class="filter-btn" data-filter="atomic_fact">Facts <span class="filter-count" id="f-fact"></span></button>
       <button class="filter-btn" data-filter="agent_case">Cases <span class="filter-count" id="f-case"></span></button>
       <button class="filter-btn" data-filter="agent_skill">Skills <span class="filter-count" id="f-skill"></span></button>
@@ -211,27 +212,25 @@
       <p class="empty-state">加载中...</p>
     </div>
 
-    <!-- 写入面板（浮动） -->
-    <div class="write-panel hidden" id="write-panel">
-      <div class="write-panel__backdrop" id="write-backdrop"></div>
-      <div class="write-panel__card">
-        <div class="write-panel__head">
-          <span>写入记忆</span>
-          <button class="btn btn--icon btn--sm" id="write-close">✕</button>
-        </div>
-        <div class="write-panel__body">
-          <select id="write-type" class="input">
-            <option value="atomic_fact">Facts · 事实</option>
-            <option value="episode">Episodes · 片段</option>
-            <option value="agent_case">Cases · 案例</option>
-            <option value="agent_skill">Skills · 技能</option>
-          </select>
-          <textarea id="write-content" class="input input--area" placeholder="输入记忆内容..." rows="3"></textarea>
-          <button class="btn btn--primary btn--full" id="write-submit">提交</button>
-          <pre class="write-result" id="write-result"></pre>
-        </div>
+    <!-- 分页 -->
+    <div class="pagination hidden" id="pagination">
+      <div class="pagination__left">
+        <label class="pagination__label">每页</label>
+        <select class="pagination__select" id="page-size">
+          <option value="10">10</option>
+          <option value="20" selected>20</option>
+          <option value="50">50</option>
+        </select>
+      </div>
+      <span class="pagination__info" id="page-info">显示 0-0 项，共 0 项</span>
+      <div class="pagination__right">
+        <button class="pagination__btn" id="page-prev" disabled>‹</button>
+        <span class="pagination__pages" id="page-numbers"></span>
+        <button class="pagination__btn" id="page-next" disabled>›</button>
       </div>
     </div>
+
+
   </section>
 
   <!-- ── 检索 ── -->
@@ -343,6 +342,6 @@
 </div>
 
 <div id="toast" class="toast hidden"></div>
-<script type="module" src="./app.js"></script>
+<script src="./app.js"></script>
 </body>
 </html>

@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import httpx
@@ -113,16 +114,21 @@ async def proxy_status():
 
         # 获取统计
         stats = {}
-        for mtype in ("episode", "atomic_fact", "agent_case", "agent_skill"):
-            try:
-                r = await client.post(
-                    f"{EVEROS_BASE_URL}/api/v1/memory/get",
-                    json={"memory_type": mtype, "limit": 1},
-                )
-                data = r.json()
-                stats[mtype] = data.get("total", 0)
-            except Exception:
-                stats[mtype] = -1
+        candidate_uids = ["default"]
+        for mtype in ("episode", "profile", "agent_case", "agent_skill"):
+            total = 0
+            for uid in candidate_uids:
+                try:
+                    r = await client.post(
+                        f"{EVEROS_BASE_URL}/api/v1/memory/get",
+                        json={"memory_type": mtype, "user_id": uid},
+                    )
+                    data = r.json()
+                    items = data.get("data", {}).get(mtype + "s", [])
+                    total += len(items)
+                except Exception:
+                    pass
+            stats[mtype] = total
 
         return {
             "healthy": ok,
@@ -154,7 +160,7 @@ async def proxy_memorize(request: Request):
             {
                 "sender_id": user_id,
                 "role": "user",
-                "timestamp": None,  # EverOS 会自动处理
+                "timestamp": int(time.time() * 1000),
                 "content": content,
             }
         ],

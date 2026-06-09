@@ -10,31 +10,53 @@ const log = (msg, data) => data
 
 // ═══ 桥接层 ──────────────────────────────────────────────────────
 
-const isPlugin = typeof window.AstrBotPluginPage !== 'undefined';
+// 延迟检测 isPlugin：桥接 SDK 在 </body> 前注入，晚于 app.js 加载
+let _isPlugin = null;
+function checkIsPlugin() {
+  if (_isPlugin !== null) return _isPlugin;
+  _isPlugin = typeof window.AstrBotPluginPage !== 'undefined';
+  return _isPlugin;
+}
 
-// 独立模式下 API 前缀（由 standalone_server.py 提供）
 const API_PREFIX = '/api/everos';
+
+// 统一解包：Plugin Page 桥接已解包一层，独立模式保留原样
+function unwrapItems(data) {
+  if (!data) return [];
+  // 独立服务器: {ok:true, data:{items:[...]}}
+  if (data.data && data.data.items) return data.data.items;
+  // Plugin Page 桥接已解包: {items:[...]}
+  if (data.items) return data.items;
+  return [];
+}
 
 const API = {
   async get(endpoint) {
-    if (isPlugin) {
-      return await window.AstrBotPluginPage.apiGet(endpoint);
+    let data;
+    if (checkIsPlugin()) {
+      data = await window.AstrBotPluginPage.apiGet(endpoint);
+    } else {
+      const r = await fetch(`${API_PREFIX}/${endpoint}`);
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+      data = await r.json();
     }
-    const r = await fetch(`${API_PREFIX}/${endpoint}`);
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-    return await r.json();
+    // 统一格式：桥接已解包一层（data = {items: [...]}），独立模式保留原样
+    return data;
   },
   async post(endpoint, body) {
-    if (isPlugin) {
-      return await window.AstrBotPluginPage.apiPost(endpoint, body);
+    let data;
+    if (checkIsPlugin()) {
+      data = await window.AstrBotPluginPage.apiPost(endpoint, body);
+    } else {
+      const r = await fetch(`${API_PREFIX}/${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+      data = await r.json();
     }
-    const r = await fetch(`${API_PREFIX}/${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-    return await r.json();
+    return data;
   },
 };
 
@@ -55,9 +77,12 @@ function fmtTime(ts) {
 
 function escape(text) {
   if (!text) return '';
-  const el = document.createElement('div');
-  el.textContent = String(text).slice(0, 500);
-  return el.innerHTML;
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function toast(msg, type = '') {
@@ -161,7 +186,7 @@ async function loadOverview() {
     $('uptime-display').textContent = ok ? `总计 ${total} 条记忆` : '等待连接...';
 
     // 获取独立服务器信息（端口等）
-    if (!isPlugin) {
+    if (!checkIsPlugin()) {
       try {
         const info = await API.get('server-info');
         if (info && info.port) {
@@ -179,7 +204,7 @@ async function loadOverview() {
     $('sys-latency').textContent = data.latency ? `${data.latency}ms` : '—';
     $('sys-version').textContent = data.app_id ? 'v1.0' : '—';
     $('sys-total-memories').textContent = total;
-    $('sys-mode').textContent = isPlugin ? '插件内嵌' : '独立服务器';
+    $('sys-mode').textContent = checkIsPlugin() ? '插件内嵌' : '独立服务器';
 
     if (ok) loadActivity();
   } catch (e) {
@@ -211,13 +236,19 @@ function animateNum(el, val) {
 async function loadActivity() {
   try {
     const data = await API.get('memories');
-    const items = data.data?.data?.items || data.data?.items || [];
+    const items = unwrapItems(data);
     const el = $('activity');
     if (!items.length) {
       el.innerHTML = '<p class="empty-state">还没有记忆沉淀</p>';
       return;
     }
-    const show = items.slice(-8).reverse();
+    // 按时间倒序排列（最新的在最前面）
+    items.sort(function(a, b) {
+      var ta = a.timestamp || a.created_at;
+      var tb = b.timestamp || b.created_at;
+      return new Date(tb).getTime() - new Date(ta).getTime();
+    });
+    const show = items.slice(0, 8);
     el.innerHTML = show.map((m, i) => {
       const type = m.memory_type || m.type || 'memory';
       const content = (m.content || m.text || '').slice(0, 120);
@@ -239,12 +270,7 @@ async function loadActivity() {
 // ═══ 快速操作 ──────────────────────────────────────────────────
 
 function setupQuickActions() {
-  $('qa-write').addEventListener('click', () => {
-    // 切换到记忆仓库 tab 并打开写入面板
-    const memTab = document.querySelector('[data-tab="memories"]');
-    if (memTab) memTab.click();
-    setTimeout(() => $('write-panel')?.classList.remove('hidden'), 300);
-  });
+  $('qa-write').addEventListener('click', showWritePanel);
 
   $('qa-search').addEventListener('click', () => {
     // 切换到检索 tab 并聚焦搜索框
@@ -280,6 +306,77 @@ function setupQuickActions() {
 let currentFilter = 'all';
 let memStats = { episode: 0, atomic_fact: 0, agent_case: 0, agent_skill: 0 };
 
+// ─── 分页状态 ────────────────────────────────────────────────
+let _allItems = [];
+let _currentPage = 1;
+var PAGE_SIZE = 20;
+
+function renderPage() {
+  var el = $('mem-list');
+  var pag = $('pagination');
+  var totalPages = Math.ceil(_allItems.length / PAGE_SIZE) || 1;
+  _currentPage = Math.min(_currentPage, totalPages);
+
+  var start = (_currentPage - 1) * PAGE_SIZE;
+  var pageItems = _allItems.slice(start, start + PAGE_SIZE);
+
+  if (!pageItems.length) {
+    el.innerHTML = '<p class="empty-state">暂无记忆</p>';
+    pag.classList.add('hidden');
+    return;
+  }
+
+  el.innerHTML = '';
+  pageItems.forEach(function(m, i) {
+    var t = m.memory_type || m.type || 'memory';
+    var content = (m.content || m.text || JSON.stringify(m));
+    var preview = content.slice(0, 150);
+    var div = document.createElement('div');
+    div.className = 'mem-item';
+    div.style.animationDelay = (i * 40) + 'ms';
+    div.innerHTML =
+      '<div class="mem-item__main">' +
+        '<div class="mem-item__head">' +
+          '<span class="mem-item__type ' + escape(t) + '">' + escape(t) + '</span>' +
+          '<span class="mem-item__time">' + fmtTime(m.timestamp || m.created_at) + '</span>' +
+        '</div>' +
+        '<div class="mem-item__content">' + escape(preview) + '</div>' +
+      '</div>';
+    div.addEventListener('click', function() {
+      window.showMemoryDetail(t, content, fmtTime(m.timestamp || m.created_at));
+    });
+    el.appendChild(div);
+  });
+
+  var from = start + 1;
+  var to = Math.min(start + PAGE_SIZE, _allItems.length);
+
+  pag.classList.remove('hidden');
+  $('page-info').textContent = '显示 ' + from + '-' + to + ' 项，共 ' + _allItems.length + ' 项';
+  $('page-prev').disabled = _currentPage <= 1;
+  $('page-next').disabled = _currentPage >= totalPages;
+
+  // 页码按钮
+  var nums = $('page-numbers');
+  nums.innerHTML = '';
+  var maxVisible = 5;
+  var half = Math.floor(maxVisible / 2);
+  var pageStart = Math.max(1, _currentPage - half);
+  var pageEnd = Math.min(totalPages, pageStart + maxVisible - 1);
+  if (pageEnd - pageStart + 1 < maxVisible) {
+    pageStart = Math.max(1, pageEnd - maxVisible + 1);
+  }
+  for (var p = pageStart; p <= pageEnd; p++) {
+    var btn = document.createElement('button');
+    btn.className = 'pagination__btn' + (p === _currentPage ? ' active' : '');
+    btn.textContent = p;
+    btn.addEventListener('click', (function(page) {
+      return function() { _currentPage = page; renderPage(); };
+    })(p));
+    nums.appendChild(btn);
+  }
+}
+
 function setupMemories() {
   $$('.filter-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -291,18 +388,26 @@ function setupMemories() {
   });
 
   $('mem-refresh').addEventListener('click', () => loadMemories(currentFilter));
-  $('mem-write-btn').addEventListener('click', () => {
-    $('write-panel').classList.remove('hidden');
+  $('mem-write-btn').addEventListener('click', showWritePanel);
+  $('page-prev').addEventListener('click', function() {
+    if (_currentPage > 1) { _currentPage--; renderPage(); }
   });
-  $('write-backdrop').addEventListener('click', closeWrite);
-  $('write-close').addEventListener('click', closeWrite);
-  $('write-submit').addEventListener('click', submitWrite);
+  $('page-next').addEventListener('click', function() {
+    var totalPages = Math.ceil(_allItems.length / PAGE_SIZE) || 1;
+    if (_currentPage < totalPages) { _currentPage++; renderPage(); }
+  });
+  $('page-size').addEventListener('change', function() {
+    PAGE_SIZE = parseInt(this.value);
+    _currentPage = 1;
+    renderPage();
+  });
 
   loadMemories('all');
 }
 
 function closeWrite() {
-  $('write-panel').classList.add('hidden');
+  const p = document.querySelector('.write-panel');
+  if (p) p.remove();
   $('write-result').className = 'write-result';
 }
 
@@ -310,46 +415,44 @@ async function loadMemories(type) {
   const el = $('mem-list');
   el.innerHTML = '<div class="skeleton skeleton--block" style="margin-bottom:8px"></div>'.repeat(5);
   try {
-    // 加载当前类型数据
     const data = type === 'all'
       ? await API.get('memories')
-      : await API.post('memories-by-type', { memory_type: type, limit: 30 });
-    const items = data.data?.data?.items || data.data?.items || [];
+      : await API.post('memories-by-type', { memory_type: type });
+    let items = unwrapItems(data);
 
-    // 同时加载各类型统计数据用于 filter-count
     await loadMemStats();
 
-    if (!items.length) {
-      el.innerHTML = '<p class="empty-state">暂无记忆</p>';
-      return;
-    }
-    el.innerHTML = items.map((m, i) => {
-      const t = m.memory_type || m.type || 'memory';
-      const content = (m.content || m.text || JSON.stringify(m)).slice(0, 150);
-      return `
-        <div class="mem-item" style="animation-delay:${i * 40}ms">
-          <span class="mem-item__type ${escape(t)}">${escape(t)}</span>
-          <span class="mem-item__content">${escape(content)}</span>
-          <span class="mem-item__time">${fmtTime(m.timestamp || m.created_at)}</span>
-        </div>`;
-    }).join('');
+    // 按时间倒序排列（最新的在最前面）
+    // 按时间倒序排列（解析 ISO 字符串，最新的在最前面）
+    items.sort(function(a, b) {
+      var ta = a.timestamp || a.created_at;
+      var tb = b.timestamp || b.created_at;
+      return new Date(tb).getTime() - new Date(ta).getTime();
+    });
+
+    _allItems = items;
+    _currentPage = 1;
+    renderPage();
   } catch (e) {
-    el.innerHTML = `<p class="empty-state">加载失败: ${escape(e.message)}</p>`;
+    el.innerHTML = '<p class="empty-state">加载失败: ' + escape(e.message) + '</p>';
   }
 }
 
 async function loadMemStats() {
   try {
     // 逐个获取各类型计数
-    const types = ['episode', 'atomic_fact', 'agent_case', 'agent_skill'];
+    const types = ['episode', 'atomic_fact', 'agent_case', 'agent_skill', 'profile'];
     for (const t of types) {
-      const data = await API.post('memories-by-type', { memory_type: t, limit: 1 });
-      const items = data.data?.data?.items || data.data?.items || [];
-      // 尝试从响应中获取 total
-      const total = data.data?.data?.total || data.data?.total || items.length;
+      const data = await API.post('memories-by-type', { memory_type: t });
+      const items = unwrapItems(data);
+      const total = items.length;
       memStats[t] = total;
       // 更新 filter-count
-      const idMap = { episode: 'f-episode', atomic_fact: 'f-fact', agent_case: 'f-case', agent_skill: 'f-skill' };
+      const idMap = {
+        episode: 'f-episode', atomic_fact: 'f-fact',
+        agent_case: 'f-case', agent_skill: 'f-skill',
+        profile: 'f-profile',
+      };
       const countEl = $(idMap[t]);
       if (countEl) countEl.textContent = total > 0 ? total : '';
     }
@@ -360,6 +463,36 @@ async function loadMemStats() {
     // 更新 tab count
     $('tab-count-memories').textContent = allTotal > 0 ? allTotal : '';
   } catch {}
+}
+
+// ─── 写入弹窗（和记忆详情弹窗同模式） ──────────────
+function showWritePanel() {
+  const old = document.querySelector('.write-panel');
+  if (old) old.remove();
+  const panel = document.createElement('div');
+  panel.className = 'write-panel';
+  panel.innerHTML =
+    '<div class="write-panel__backdrop" onclick="this.parentElement.remove()"></div>' +
+    '<div class="write-panel__card">' +
+      '<div class="write-panel__head">' +
+        '<span>写入记忆</span>' +
+        '<button class="btn btn--icon btn--sm" onclick="this.parentElement.parentElement.parentElement.remove()">✕</button>' +
+      '</div>' +
+      '<div class="write-panel__body">' +
+        '<select id="write-type" class="input">' +
+          '<option value="atomic_fact">Facts · 事实</option>' +
+          '<option value="episode">Episodes · 片段</option>' +
+          '<option value="agent_case">Cases · 案例</option>' +
+          '<option value="agent_skill">Skills · 技能</option>' +
+        '</select>' +
+        '<textarea id="write-content" class="input input--area" placeholder="输入记忆内容..." rows="6"></textarea>' +
+        '<button class="btn btn--primary btn--full" id="write-submit">提交</button>' +
+        '<pre class="write-result" id="write-result"></pre>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(panel);
+  // 绑定提交事件
+  $('write-submit').addEventListener('click', submitWrite);
 }
 
 async function submitWrite() {
@@ -413,7 +546,7 @@ async function doSearch() {
 
   try {
     const data = await API.post('search', { query: q, top_k: 10 });
-    const items = data.data?.data?.items || data.results || [];
+    const items = unwrapItems(data);
     if (!items.length) {
       el.innerHTML = '<p class="empty-state">未找到匹配结果</p>';
       return;
@@ -446,8 +579,8 @@ async function loadSkills() {
   const el = $('skill-grid');
   el.innerHTML = '<div class="skeleton skeleton--block" style="height:80px"></div>'.repeat(4);
   try {
-    const data = await API.post('memories-by-type', { memory_type: 'agent_skill', limit: 50 });
-    const items = data.data?.data?.items || data.data?.items || [];
+    const data = await API.post('memories-by-type', { memory_type: 'agent_skill' });
+    const items = unwrapItems(data);
     const count = items.length;
     $('skills-count').textContent = count ? `${count} 个技能` : '暂无';
     $('tab-count-skills').textContent = count > 0 ? count : '';
@@ -490,10 +623,10 @@ function setupSettings() {
     }
   } catch {}
 
-  $('mode-label').textContent = isPlugin ? 'AstrBot 插件内嵌' : '独立服务器';
-  $('settings-mode-label').textContent = isPlugin ? '插件内嵌' : '独立服务器';
+  $('mode-label').textContent = checkIsPlugin() ? 'AstrBot 插件内嵌' : '独立服务器';
+  $('settings-mode-label').textContent = checkIsPlugin() ? '插件内嵌' : '独立服务器';
 
-  if (isPlugin) {
+  if (checkIsPlugin()) {
     $('set-url').placeholder = '由插件配置管理';
     $('set-app').placeholder = 'astrbot';
     $('set-project').placeholder = 'default';
@@ -552,12 +685,55 @@ function setupTabs() {
   });
 }
 
+// ═══ 记忆缓存（供 onclick 查找完整内容）────────────────────
+
+window._memCache = [];
+
+window.showDetailFromCache = function(idx, type, time) {
+  const content = window._memCache[idx] || '';
+  window.showMemoryDetail(type, content, time);
+};
+
+window.showMemoryDetail = function(type, content, time) {
+  const old = document.querySelector('.detail-panel');
+  if (old) old.remove();
+
+  const panel = document.createElement('div');
+  panel.className = 'detail-panel';
+  panel.innerHTML =
+    '<div class="detail-panel__backdrop" onclick="this.parentElement.remove()"></div>' +
+    '<div class="detail-panel__card">' +
+      '<div class="detail-panel__head">' +
+        '<span class="mem-item__type ' + escape(type) + '">' + escape(type) + '</span>' +
+        '<span>' + time + '</span>' +
+        '<button class="btn btn--icon btn--sm" onclick="this.closest(\'.detail-panel\').remove()">✕</button>' +
+      '</div>' +
+      '<div class="detail-panel__body">' + escape(content) + '</div>' +
+    '</div>';
+  document.body.appendChild(panel);
+};
+
 // ═══ 启动 ──────────────────────────────────────────────────────
 
-async function init() {
-  log(`模式: ${isPlugin ? 'AstrBot 插件内嵌' : '独立服务器'}`);
+async function waitForBridge(timeoutMs = 5000) {
+  // 等待桥接 SDK 注入（AstrBot 把它加在 </body> 前，晚于 app.js 加载）
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (typeof window.AstrBotPluginPage !== 'undefined') {
+      _isPlugin = true;
+      return true;
+    }
+    await new Promise(r => setTimeout(r, 50));
+  }
+  _isPlugin = false;
+  return false;
+}
 
-  if (isPlugin) {
+async function init() {
+  await waitForBridge();
+  log(`模式: ${checkIsPlugin() ? 'AstrBot 插件内嵌' : '独立服务器'}`);
+
+  if (checkIsPlugin()) {
     try { await window.AstrBotPluginPage.ready(); } catch (e) { log('bridge.ready 失败', e); }
   }
 

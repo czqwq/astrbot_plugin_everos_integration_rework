@@ -159,7 +159,7 @@ pip install fastapi uvicorn
 | `standalone_webui_port` | `18766` | 独立 WebUI 访问端口 |
 | `app_id` | `astrbot` | 应用标识 |
 | `project_id` | `default` | 项目标识 |
-| `isolation_personas` | `""` | 记忆隔离白名单（逗号分隔）。在此列表里的人格使用独立记忆空间，列表外的人格共享全部记忆。例如 `白芷,欣雨` |
+| `isolation_personas` | `""` | 记忆隔离白名单（逗号分隔）。在此列表里的人格使用独立记忆空间，列表外的人格共享全部记忆。例如 `助手A,助手B` |
 
 ---
 
@@ -262,3 +262,41 @@ docker restart everos
 ## 📄 License
 
 Apache 2.0
+
+---
+
+## 📋 v1.1.0 更新内容
+
+### 新增功能
+- 🧠 **`everos_learn` 工具** — AI 智能体将自身技能/规则存入 Agent Track，触发 Case/Skill 提炼
+- 💬 **`/everos` 命令组** — `status` / `memorize` / `learn` / `flush` / `search` / `remove` / `help`
+- 🗑️ **记忆删除** — `POST /api/everos/forget` 接口 + `/everos remove` 命令
+- 📄 **分页** — 记忆仓库每页 15 条，支持翻页
+- 🔄 **对话积累模式** — 固定 session_id 积累消息，边界检测自然触发，提升记忆提炼质量
+
+### 优化改进
+- 🔍 **双轨检索** — 永忆引擎 v3 使用正交检索（user_id→User Track, agent_id→Agent Track），不轮询
+- ⏱️ **flush 结果展示** — `/everos flush` 显示提炼前后的记忆变化
+- 🎨 **全屏写入弹窗** — 仿记忆详情弹窗模式，居中显示
+- 📊 **记忆仓库排序** — 按时间倒序（最新的在最上面）
+- 🏠 **最近活动排序** — 最新的在最前面
+
+### Bug 修复
+- 修复 `server.py` 缺少 `import time` 导致的运行时崩溃
+- 修复 WebUI flush 默认 session 不匹配对话积累 session
+- 修复 ISO 字符串排序无效（`new Date()` 转换）
+- 修复 `standalone_server.py` 的 proxy_status 未传 user_id
+
+### 完整修改文件清单
+| 文件 | 改动 |
+|------|------|
+| `main.py` | 命令组、`everos_learn` 注册、forget/remove 命令、flush 结果展示 |
+| `core/standalone_server.py` | forget API、flush 默认 session 改为 default_dialog |
+| `core/retrieval_hook.py` | v3 正交检索重写（去除轮询和 LM 回退） |
+| `core/dialog_sync.py` | 固定 session_id 积累模式 |
+| `tools/everos_tools.py` | 新增 `EverOSLearnTool` |
+| `pages/everos-dashboard/app.js` | 分页、排序、动态写入弹窗 |
+| `pages/everos-dashboard/index.html` | 优化写入弹窗结构 |
+| `pages/everos-dashboard/style.css` | 全屏遮罩/侧边栏/分页样式 |
+| `pages/everos-dashboard/server.py` | 补 `import time`、修复 proxy_status |
+| `metadata.yaml` | 版本号 → 1.1.0 |

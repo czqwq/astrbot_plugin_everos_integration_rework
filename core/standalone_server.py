@@ -8,6 +8,8 @@ EverOS 独立 WebUI 服务器。
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -34,9 +36,9 @@ def _normalize_item(item: dict, mtype: str = "episode") -> dict:
     if not item.get("content"):
         if mtype == "episode":
             item["content"] = (
-                item.get("summary")
+                item.get("episode")  # 完整内容优先
+                or item.get("summary")
                 or item.get("subject")
-                or item.get("episode")
                 or json.dumps(item, ensure_ascii=False)[:200]
             )
         elif "profile_data" in item:
@@ -146,24 +148,40 @@ class StandaloneServer:
                 ok = health_data.get("status") == "ok"
 
                 stats = {}
+                # 尝试多个可能的 user_id 以覆盖不同用户写入的记忆
+                candidate_uids = [
+                    self.config.get("app_id", "astrbot"),
+                    "default", "webui",
+                ]
                 for mtype in ("episode", "profile", "agent_case", "agent_skill"):
-                    try:
-                        r = await client.post(
-                            f"{base_url}/api/v1/memory/get",
-                            json={
-                                "memory_type": mtype,
-                                "user_id": "baizhi",
-                                "app_id": "astrbot",
-                                "project_id": "default",
-                            },
-                        )
-                        data = r.json()
-                        d = data.get("data", {})
-                        # episodes/profiles/agent_cases/agent_skills
-                        items = d.get(mtype + "s", [])
-                        stats[mtype] = d.get("total_count", len(items))
-                    except Exception:
-                        stats[mtype] = -1
+                    total = 0
+                    seen_ids = set()
+                    for uid in candidate_uids:
+                        try:
+                            r = await client.post(
+                                f"{base_url}/api/v1/memory/get",
+                                json={
+                                    "memory_type": mtype,
+                                    "user_id": uid,
+                                    "app_id": "astrbot",
+                                    "project_id": "default",
+                                },
+                            )
+                            data = r.json()
+                            d = data.get("data", {})
+                            items = d.get(mtype + "s", [])
+                            for item in items:
+                                mid = item.get("id", "")
+                                if mid and mid not in seen_ids:
+                                    seen_ids.add(mid)
+                                    total += 1
+                            # 如果 API 返回了 total_count，用最大值
+                            tc = d.get("total_count", 0)
+                            if tc > total:
+                                total = tc
+                        except Exception:
+                            continue
+                    stats[mtype] = total
 
                 return {
                     "healthy": ok,
@@ -181,30 +199,39 @@ class StandaloneServer:
             """获取各类型记忆（最近活动）。"""
             client = self._get_client()
             base_url = self._get_everos_url()
+            candidate_uids = [
+                self.config.get("app_id", "astrbot"),
+                "default", "webui",
+            ]
             try:
                 all_items = []
+                seen_ids = set()
                 for mtype in ("episode", "profile", "agent_case", "agent_skill"):
-                    try:
-                        r = await client.post(
-                            f"{base_url}/api/v1/memory/get",
-                            json={
-                                "memory_type": mtype,
-                                "user_id": "baizhi",
-                                "app_id": "astrbot",
-                                "project_id": "default",
-                            },
-                        )
-                        data = r.json()
-                        d = data.get("data", {})
-                        # EverOS 返回 episodes/profiles/agent_cases/agent_skills
-                        items = d.get(mtype + "s", [])
-                        for item in items:
-                            if isinstance(item, dict):
-                                item["memory_type"] = item.get("memory_type") or mtype
-                                item = _normalize_item(item, mtype)
-                                all_items.append(item)
-                    except Exception:
-                        continue
+                    for uid in candidate_uids:
+                        try:
+                            r = await client.post(
+                                f"{base_url}/api/v1/memory/get",
+                                json={
+                                    "memory_type": mtype,
+                                    "user_id": uid,
+                                    "app_id": "astrbot",
+                                    "project_id": "default",
+                                },
+                            )
+                            data = r.json()
+                            d = data.get("data", {})
+                            items = d.get(mtype + "s", [])
+                            for item in items:
+                                if isinstance(item, dict):
+                                    mid = item.get("id", "")
+                                    if mid and mid in seen_ids:
+                                        continue
+                                    seen_ids.add(mid)
+                                    item["memory_type"] = item.get("memory_type") or mtype
+                                    item = _normalize_item(item, mtype)
+                                    all_items.append(item)
+                        except Exception:
+                            continue
                 return {"ok": True, "data": {"items": all_items}}
             except Exception as e:
                 return {"ok": False, "error": str(e), "data": {"items": []}}
@@ -226,7 +253,7 @@ class StandaloneServer:
                 "messages": [{
                     "sender_id": user_id,
                     "role": "user",
-                    "timestamp": None,
+                    "timestamp": int(time.time() * 1000),
                     "content": content,
                 }],
             }
@@ -251,28 +278,42 @@ class StandaloneServer:
             """按类型获取记忆。"""
             body = await request.json()
             memory_type = body.get("memory_type", "episode")
+            candidate_uids = [
+                self.config.get("app_id", "astrbot"),
+                "default", "webui",
+            ]
             client = self._get_client()
             base_url = self._get_everos_url()
             try:
-                r = await client.post(
-                    f"{base_url}/api/v1/memory/get",
-                    json={
-                        "memory_type": memory_type,
-                        "user_id": "baizhi",
-                        "app_id": "astrbot",
-                        "project_id": "default",
-                    },
-                )
-                r.raise_for_status()
-                data = r.json()
-                d = data.get("data", {})
-                # memory/get 返回 episodes/profiles/agent_cases/agent_skills
-                items = d.get(memory_type + "s", [])
-                for item in items:
-                    if isinstance(item, dict):
-                        item["memory_type"] = item.get("memory_type") or memory_type
-                        item = _normalize_item(item, memory_type)
-                return {"ok": True, "data": {"items": items}}
+                all_items = []
+                seen_ids = set()
+                for uid in candidate_uids:
+                    try:
+                        r = await client.post(
+                            f"{base_url}/api/v1/memory/get",
+                            json={
+                                "memory_type": memory_type,
+                                "user_id": uid,
+                                "app_id": "astrbot",
+                                "project_id": "default",
+                            },
+                        )
+                        r.raise_for_status()
+                        data = r.json()
+                        d = data.get("data", {})
+                        items = d.get(memory_type + "s", [])
+                        for item in items:
+                            if isinstance(item, dict):
+                                mid = item.get("id", "")
+                                if mid and mid in seen_ids:
+                                    continue
+                                seen_ids.add(mid)
+                                item["memory_type"] = item.get("memory_type") or memory_type
+                                item = _normalize_item(item, memory_type)
+                                all_items.append(item)
+                    except Exception:
+                        continue
+                return {"ok": True, "data": {"items": all_items}}
             except Exception as e:
                 return {"ok": False, "error": str(e), "data": {"items": []}}
 
@@ -280,7 +321,7 @@ class StandaloneServer:
         async def api_flush(request: Request):
             """触发记忆提炼。"""
             body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
-            session_id = body.get("session_id", "webui")
+            session_id = body.get("session_id", "default_dialog")
             client = self._get_client()
             base_url = self._get_everos_url()
             try:
@@ -303,34 +344,78 @@ class StandaloneServer:
             body = await request.json()
             query = body.get("query", "")
             top_k = body.get("top_k", 10)
+            candidate_uids = [
+                self.config.get("app_id", "astrbot"),
+                "default", "webui",
+            ]
             client = self._get_client()
             base_url = self._get_everos_url()
             try:
-                resp = await client.post(
-                    f"{base_url}/api/v1/memory/search",
-                    json={
-                        "query": query,
-                        "user_id": "baizhi",
-                        "app_id": self.config.get("app_id", "astrbot"),
-                        "project_id": self.config.get("project_id", "default"),
-                        "top_k": top_k,
-                    },
-                )
-                resp.raise_for_status()
-                raw = resp.json()
-                # 将 EverOS search 返回的各类型记忆聚合成 items 列表
-                rd = raw.get("data", {})
                 all_items = []
-                for key in ("episodes", "profiles", "agent_cases", "agent_skills"):
-                    items = rd.get(key, [])
-                    for item in items:
-                        if isinstance(item, dict):
-                            item["memory_type"] = item.get("memory_type") or key.rstrip("s")
-                            item = _normalize_item(item, key.rstrip("s"))
-                            all_items.append(item)
+                seen_ids = set()
+                per_uid = max(1, top_k // len(candidate_uids))
+                for uid in candidate_uids:
+                    try:
+                        resp = await client.post(
+                            f"{base_url}/api/v1/memory/search",
+                            json={
+                                "query": query,
+                                "user_id": uid,
+                                "app_id": self.config.get("app_id", "astrbot"),
+                                "project_id": self.config.get("project_id", "default"),
+                                "top_k": per_uid,
+                            },
+                        )
+                        raw = resp.json()
+                        rd = raw.get("data", {})
+                        for key in ("episodes", "profiles", "agent_cases", "agent_skills"):
+                            for item in rd.get(key, []):
+                                if isinstance(item, dict):
+                                    mid = item.get("id", "")
+                                    if mid and mid in seen_ids:
+                                        continue
+                                    seen_ids.add(mid)
+                                    item["memory_type"] = item.get("memory_type") or key.rstrip("s")
+                                    item = _normalize_item(item, key.rstrip("s"))
+                                    all_items.append(item)
+                    except Exception:
+                        continue
                 return {"ok": True, "data": {"items": all_items}}
             except Exception as e:
                 return {"ok": False, "error": str(e), "data": {"items": []}}
+
+        @self.app.post("/api/everos/forget")
+        async def api_forget(request: Request):
+            """删除指定 ID 的记忆。"""
+            body = await request.json()
+            memory_id = body.get("id", "")
+            memory_type = body.get("memory_type", "episode")
+
+            if not memory_id:
+                return {"ok": False, "error": "缺少 id 参数"}
+
+            try:
+                from everos.infra.persistence.lancedb import (
+                    episode_repo, atomic_fact_repo,
+                    agent_case_repo, agent_skill_repo,
+                )
+                repo_map = {
+                    "episode": episode_repo,
+                    "atomic_fact": atomic_fact_repo,
+                    "agent_case": agent_case_repo,
+                    "agent_skill": agent_skill_repo,
+                }
+                repo = repo_map.get(memory_type)
+                if not repo:
+                    return {"ok": False, "error": f"不支持的记忆类型: {memory_type}"}
+
+                predicate = f"id = '{memory_id}'"
+                await repo.delete(predicate)
+                logger.info(f"🗑️ 已删除记忆: {memory_id} ({memory_type})")
+                return {"ok": True, "data": {"deleted": memory_id}}
+            except Exception as e:
+                logger.error(f"删除记忆失败: {e}")
+                return {"ok": False, "error": str(e)}
 
         @self.app.get("/api/everos/server-info")
         async def api_server_info():

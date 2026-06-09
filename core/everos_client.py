@@ -122,26 +122,21 @@ class EverOSClient:
     async def memory_get(
         self,
         memory_type: str = "episode",
+        user_id: str = "default",
         app_id: str = "astrbot",
         project_id: str = "default",
-        limit: int = 20,
-        offset: int = 0,
-        filters: dict | None = None,
     ) -> dict[str, Any]:
         """POST /api/v1/memory/get
 
-        分页检索记忆。
+        检索记忆。EverOS API 需要 user_id，不接受 limit/offset。
         memory_type: episode / atomic_fact / agent_case / agent_skill / user_profile / foresight
         """
         payload: dict[str, Any] = {
             "memory_type": memory_type,
+            "user_id": user_id,
             "app_id": app_id,
             "project_id": project_id,
-            "limit": limit,
-            "offset": offset,
         }
-        if filters:
-            payload["filters"] = filters
         resp = await self._client.post(
             f"{self.base_url}/api/v1/memory/get", json=payload
         )
@@ -152,7 +147,7 @@ class EverOSClient:
 
     async def stats(
         self,
-        user_id: str = "baizhi",
+        user_id: str = "default",
         app_id: str = "astrbot",
         project_id: str = "default",
     ) -> dict[str, int]:

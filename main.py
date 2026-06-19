@@ -198,7 +198,7 @@ class EverOSIntegrationPlugin(Star):
                     try:
                         result = await self._client.memory_get(
                             memory_type=mtype,
-                            user_id=uid,
+                            user_id=uid, agent_id=uid,
                         )
                         if isinstance(result, dict):
                             data = result.get("data", result)
@@ -324,7 +324,10 @@ class EverOSIntegrationPlugin(Star):
         except Exception:
             body = {}
 
-        memory_type = body.get("memory_type", "episode")
+        # 旧版兼容 + 规范化（必须与 EverOS /get 端点的合法值一致）
+        raw_type = body.get("memory_type", "episode")
+        _COMPAT = {"atomic_fact": "episode"}
+        memory_type = _COMPAT.get(raw_type, raw_type)
         candidate_uids = [
             self.config.app_id,
             "default", "webui",

@@ -446,48 +446,70 @@ class StandaloneServer:
             logger.error("[EverOS] 无法启动独立 WebUI: FastAPI 未安装")
             return
 
-        if not self._running:
-            if not self.config.get("standalone_webui_enabled", True):
-                logger.info("[EverOS] 独立 WebUI 未启用")
-                return
+        if self._running:
+            return
 
-            host = self.config.get("standalone_webui_host", "0.0.0.0")
-            port = int(self.config.get("standalone_webui_port", 18766))
+        if not self.config.get("standalone_webui_enabled", True):
+            logger.info("[EverOS] 独立 WebUI 未启用")
+            return
 
-            uv_cfg = uvicorn.Config(
-                self.app,
-                host=host,
-                port=port,
-                log_level="warning",
-                access_log=False,
-            )
-            self.server = uvicorn.Server(uv_cfg)
-            self._running = True
+        host = self.config.get("standalone_webui_host", "0.0.0.0")
+        port = int(self.config.get("standalone_webui_port", 18766))
 
-            async def _serve():
-                try:
-                    await self.server.serve()
-                except Exception as e:
-                    logger.error(f"[EverOS] 独立 WebUI 运行异常: {e}")
-                finally:
-                    self._running = False
-                    if self._http_client:
-                        await self._http_client.aclose()
-                        self._http_client = None
+        uv_cfg = uvicorn.Config(
+            self.app,
+            host=host,
+            port=port,
+            log_level="warning",
+            access_log=False,
+        )
+        self.server = uvicorn.Server(uv_cfg)
+        self._running = True
 
-            self.server_task = asyncio.create_task(_serve())
-            logger.info(f"🌿 EverOS Dashboard → http://{host}:{port}")
+        async def _serve():
+            try:
+                await self.server.serve()
+            except OSError as e:
+                # 端口被占用（常见于热重载时旧 socket 尚未释放）
+                logger.warning(
+                    f"[EverOS] 独立 WebUI 端口 {port} 被占用，"
+                    f"等待旧连接释放后将在下次状态刷新时自动恢复: {e}"
+                )
+            except asyncio.CancelledError:
+                # 正常关闭流程（stop() 触发）
+                pass
+            except Exception as e:
+                logger.error(f"[EverOS] 独立 WebUI 运行异常: {e}")
+            finally:
+                self._running = False
+                self.server_task = None
+                if self._http_client:
+                    await self._http_client.aclose()
+                    self._http_client = None
+
+        self.server_task = asyncio.create_task(_serve())
+        logger.info(f"🌿 EverOS Dashboard → http://{host}:{port}")
 
     async def stop(self) -> None:
         if self.server:
             self.server.should_exit = True
-        if self.server_task:
-            self.server_task.cancel()
+
+        if self.server_task and not self.server_task.done():
             try:
-                await self.server_task
+                # 等待 uvicorn 优雅关闭（让 socket 正确释放）
+                await asyncio.wait_for(self.server_task, timeout=3.0)
+            except asyncio.TimeoutError:
+                # 3 秒未退出则强制取消
+                logger.warning("[EverOS] WebUI 优雅关闭超时，强制终止")
+                self.server_task.cancel()
+                try:
+                    await self.server_task
+                except (asyncio.CancelledError, Exception):
+                    pass
             except asyncio.CancelledError:
                 pass
             self.server_task = None
+
         if self._http_client:
             await self._http_client.aclose()
             self._http_client = None

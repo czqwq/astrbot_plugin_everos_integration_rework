@@ -476,42 +476,59 @@ class StandaloneServer:
                     f"等待旧连接释放后将在下次状态刷新时自动恢复: {e}"
                 )
             except asyncio.CancelledError:
-                # 正常关闭流程（stop() 触发）
-                pass
+                # 正常关闭流程（stop() 触发）—— 确保 uvicorn 清理资源
+                try:
+                    self.server.should_exit = True
+                    # 给 uvicorn 一个事件循环周期释放 socket
+                    await asyncio.sleep(0.1)
+                except Exception:
+                    pass
+                raise  # 重新抛出，让任务进入已取消状态
             except Exception as e:
                 logger.error(f"[EverOS] 独立 WebUI 运行异常: {e}")
             finally:
                 self._running = False
                 self.server_task = None
                 if self._http_client:
-                    await self._http_client.aclose()
+                    try:
+                        await self._http_client.aclose()
+                    except Exception:
+                        pass
                     self._http_client = None
 
         self.server_task = asyncio.create_task(_serve())
         logger.info(f"🌿 EverOS Dashboard → http://{host}:{port}")
 
     async def stop(self) -> None:
+        """停止独立 WebUI 服务器，确保端口正确释放。"""
         if self.server:
-            self.server.should_exit = True
+            try:
+                self.server.should_exit = True
+            except Exception:
+                pass
 
         if self.server_task and not self.server_task.done():
             try:
                 # 等待 uvicorn 优雅关闭（让 socket 正确释放）
-                await asyncio.wait_for(self.server_task, timeout=3.0)
+                await asyncio.wait_for(self.server_task, timeout=5.0)
             except asyncio.TimeoutError:
-                # 3 秒未退出则强制取消
+                # 5 秒未退出则强制取消
                 logger.warning("[EverOS] WebUI 优雅关闭超时，强制终止")
                 self.server_task.cancel()
                 try:
-                    await self.server_task
-                except (asyncio.CancelledError, Exception):
+                    await asyncio.wait_for(self.server_task, timeout=2.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
                     pass
             except asyncio.CancelledError:
                 pass
-            self.server_task = None
+            finally:
+                self.server_task = None
 
         if self._http_client:
-            await self._http_client.aclose()
+            try:
+                await self._http_client.aclose()
+            except Exception:
+                pass
             self._http_client = None
         self._running = False
         logger.info("[EverOS] 独立 WebUI 已停止")

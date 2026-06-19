@@ -714,15 +714,20 @@ window.showMemoryDetail = function(type, content, time) {
 
 // ═══ 启动 ──────────────────────────────────────────────────────
 
-async function waitForBridge(timeoutMs = 5000) {
-  // 等待桥接 SDK 注入（AstrBot 把它加在 </body> 前，晚于 app.js 加载）
+async function waitForBridge(timeoutMs = 500) {
+  // 快速同步检查：桥接 SDK 通常在 app.js 之前就已可用
+  if (typeof window.AstrBotPluginPage !== 'undefined') {
+    _isPlugin = true;
+    return true;
+  }
+  // 短暂等待（AstrBot SDK 在 </body> 前注入，可能晚于 app.js 加载）
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
+    await new Promise(r => setTimeout(r, 50));
     if (typeof window.AstrBotPluginPage !== 'undefined') {
       _isPlugin = true;
       return true;
     }
-    await new Promise(r => setTimeout(r, 50));
   }
   _isPlugin = false;
   return false;

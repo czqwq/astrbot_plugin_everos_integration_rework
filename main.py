@@ -678,11 +678,36 @@ class EverOSIntegrationPlugin(Star):
     # ─── 生命周期 ──────────────────────────────────────────────────
 
     async def terminate(self) -> None:
-        """插件卸载时关闭 HTTP 客户端和独立 WebUI。"""
-        if self._client:
-            await self._client.close()
-        if self._standalone_server:
-            await self._standalone_server.stop()
+        """插件卸载时关闭 HTTP 客户端和独立 WebUI。
+
+        关键：必须防止任何清理步骤卡死 astrbot 的插件卸载流程。
+        使用超时保护 + 独立异常隔离，确保每个资源都尽力释放。
+        """
+        # 1. 先取消后台初始化任务，打断可能正在进行的启动流程
         if self._bg_task and not self._bg_task.done():
             self._bg_task.cancel()
+            try:
+                await self._bg_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        # 2. 关闭 EverOS HTTP 客户端
+        if self._client:
+            try:
+                await self._client.close()
+            except Exception as e:
+                logger.warning(f"[EverOS] 关闭客户端异常: {e}")
+
+        # 3. 停止独立 WebUI 服务器（带超时保护，防止卡死）
+        if self._standalone_server:
+            try:
+                await asyncio.wait_for(
+                    self._standalone_server.stop(),
+                    timeout=6.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("[EverOS] 停止独立 WebUI 超时（6秒），强制跳过")
+            except Exception as e:
+                logger.warning(f"[EverOS] 停止独立 WebUI 异常: {e}")
+
         logger.info("EverOS Integration 已关闭")

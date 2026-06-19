@@ -74,6 +74,7 @@ class EverOSIntegrationPlugin(Star):
         self._tools_registered = False
         self._healthy = False
         self._standalone_server: StandaloneServer | None = None
+        self._known_user_ids: set[str] = set()  # 追踪聊天中出现的真实用户 ID
 
         # 注册 Web API
         self._register_web_apis()
@@ -137,11 +138,7 @@ class EverOSIntegrationPlugin(Star):
         if healthy:
             try:
                 t0 = time.monotonic()
-                # 多 user_id 聚合统计
-                candidate_uids = [
-                    self.config.app_id,
-                    "default", "webui",
-                ]
+                candidate_uids = self._get_candidate_uids()
                 for mtype in ("episode", "profile", "agent_case", "agent_skill"):
                     total = 0
                     seen_ids = set()
@@ -189,10 +186,7 @@ class EverOSIntegrationPlugin(Star):
         try:
             all_items = []
             seen_ids = set()
-            candidate_uids = [
-                self.config.app_id,
-                "default", "webui",
-            ]
+            candidate_uids = self._get_candidate_uids()
             for mtype in ("episode", "profile", "agent_case", "agent_skill"):
                 for uid in candidate_uids:
                     try:
@@ -328,10 +322,7 @@ class EverOSIntegrationPlugin(Star):
         raw_type = body.get("memory_type", "episode")
         _COMPAT = {"atomic_fact": "episode"}
         memory_type = _COMPAT.get(raw_type, raw_type)
-        candidate_uids = [
-            self.config.app_id,
-            "default", "webui",
-        ]
+        candidate_uids = self._get_candidate_uids()
 
         try:
             all_items = []
@@ -379,15 +370,12 @@ class EverOSIntegrationPlugin(Star):
             return jsonify({"ok": False, "error": "查询为空", "results": []})
 
         top_k = min(body.get("top_k", 10), 50)
-        candidate_uids = [
-            self.config.app_id,
-            "default", "webui",
-        ]
+        candidate_uids = self._get_candidate_uids()
 
         try:
             all_items = []
             seen_ids = set()
-            per_uid = max(1, top_k // len(candidate_uids))
+            per_uid = max(1, top_k // max(len(candidate_uids), 1))
             for uid in candidate_uids:
                 try:
                     result = await self._client.memory_search(
@@ -466,6 +454,35 @@ class EverOSIntegrationPlugin(Star):
 
     # ─── 命令组 ──────────────────────────────────────────────────────
 
+    def _track_user(self, event: AstrMessageEvent) -> None:
+        """从事件中记录用户 ID，供 Dashboard 查询时使用。"""
+        try:
+            uid = event.get_sender_id()
+            if uid:
+                self._known_user_ids.add(str(uid))
+        except Exception:
+            pass
+
+    def _get_uid(self, event: AstrMessageEvent) -> str:
+        """从事件中提取用户 ID 字符串。"""
+        try:
+            uid = event.get_sender_id()
+            return str(uid) if uid else ""
+        except Exception:
+            return ""
+
+    def _get_candidate_uids(self) -> list[str]:
+        """获取用于 EverOS 查询的候选 user_id/agent_id 列表。"""
+        base = [
+            self.config.app_id,
+            "default",
+            "webui",
+        ]
+        for uid in self._known_user_ids:
+            if uid not in base:
+                base.append(uid)
+        return base
+
     @filter.command_group("everos")
     def everos(self):
         """EverOS 记忆管理命令组"""
@@ -475,6 +492,7 @@ class EverOSIntegrationPlugin(Star):
     @everos.command("status", priority=10)
     async def cmd_everos_status(self, event: AstrMessageEvent):
         """/everos status — 查看 EverOS 连接状态"""
+        self._track_user(event)
         if self._healthy:
             yield event.plain_result(
                 f"🧠 **EverOS Integration** v1.1.0\n"
@@ -496,12 +514,13 @@ class EverOSIntegrationPlugin(Star):
         self, event: AstrMessageEvent, content: str
     ):
         """/everos memorize <内容> — 手动存储一条记忆到 User Track"""
+        self._track_user(event)
         if not self._client:
             yield event.plain_result("❌ EverOS 客户端未初始化")
             return
 
         tool = EverOSMemorizeTool(self._client, self.config)
-        result = await tool(content=content)
+        result = await tool(content=content, user_id=self._get_uid(event))
         yield event.plain_result(result)
 
     @permission_type(PermissionType.ADMIN)
@@ -510,18 +529,20 @@ class EverOSIntegrationPlugin(Star):
         self, event: AstrMessageEvent, content: str
     ):
         """/everos learn <内容> — 手动存储一条技能/规则到 Agent Track"""
+        self._track_user(event)
         if not self._client:
             yield event.plain_result("❌ EverOS 客户端未初始化")
             return
 
         tool = EverOSLearnTool(self._client, self.config)
-        result = await tool(content=content)
+        result = await tool(content=content, user_id=self._get_uid(event))
         yield event.plain_result(result)
 
     @permission_type(PermissionType.ADMIN)
     @everos.command("flush")
     async def cmd_everos_flush(self, event: AstrMessageEvent):
         """/everos flush — 立即触发记忆提炼并显示结果"""
+        self._track_user(event)
         if not self._client:
             yield event.plain_result("❌ EverOS 客户端未初始化")
             return
@@ -627,6 +648,7 @@ class EverOSIntegrationPlugin(Star):
         self, event: AstrMessageEvent, query: str
     ):
         """/everos search <关键词> — 搜索 EverOS 记忆"""
+        self._track_user(event)
         if not self._client:
             yield event.plain_result("❌ EverOS 客户端未初始化")
             return
@@ -641,6 +663,7 @@ class EverOSIntegrationPlugin(Star):
         self, event: AstrMessageEvent, memory_id: str
     ):
         """/everos remove <记忆ID> — 删除指定记忆"""
+        self._track_user(event)
         if not self._client:
             yield event.plain_result("❌ EverOS 客户端未初始化")
             return

@@ -80,6 +80,34 @@ class StandaloneServer:
             self._http_client = httpx.AsyncClient(timeout=30.0, verify=False)
         return self._http_client
 
+    def _get_candidate_uids(self) -> list[str]:
+        """获取用于 EverOS 查询的候选 user_id/agent_id 列表。
+
+        包含：配置的 app_id、常见默认值、以及插件从聊天事件中追踪到的真实 QQ 用户 ID。
+        去重并保持优先级顺序。
+        """
+        base = [
+            self.config.get("app_id", "astrbot"),
+            "default",
+            "webui",
+        ]
+        # 追加插件追踪到的真实用户 ID（如 QQ 号）
+        try:
+            tracked = getattr(self.plugin, "_known_user_ids", None)
+            if tracked:
+                for uid in tracked:
+                    if uid not in base:
+                        base.append(uid)
+        except Exception:
+            pass
+        return base
+
+    def _get_app_id(self) -> str:
+        return self.config.get("app_id", "astrbot")
+
+    def _get_project_id(self) -> str:
+        return self.config.get("project_id", "default")
+
     def _setup_app(self) -> None:
         self.app = FastAPI(title="EverOS Dashboard (Standalone)")
 
@@ -141,18 +169,18 @@ class StandaloneServer:
             """聚合健康检查 + 统计。"""
             client = self._get_client()
             base_url = self._get_everos_url()
+            app_id = self._get_app_id()
+            project_id = self._get_project_id()
+            t0 = time.monotonic()
             try:
                 health = await client.get(f"{base_url}/health")
                 health.raise_for_status()
                 health_data = health.json()
                 ok = health_data.get("status") == "ok"
+                latency_ms = int((time.monotonic() - t0) * 1000)
 
                 stats = {}
-                # 尝试多个可能的 user_id 以覆盖不同用户写入的记忆
-                candidate_uids = [
-                    self.config.get("app_id", "astrbot"),
-                    "default", "webui",
-                ]
+                candidate_uids = self._get_candidate_uids()
                 agent_kinds = {"agent_case", "agent_skill"}
                 for mtype in ("episode", "profile", "agent_case", "agent_skill"):
                     total = 0
@@ -166,8 +194,8 @@ class StandaloneServer:
                                 json={
                                     "memory_type": mtype,
                                     owner_field: uid,
-                                    "app_id": "astrbot",
-                                    "project_id": "default",
+                                    "app_id": app_id,
+                                    "project_id": project_id,
                                 },
                             )
                             data = r.json()
@@ -189,23 +217,29 @@ class StandaloneServer:
                 return {
                     "healthy": ok,
                     "base_url": base_url,
-                    "latency": None,
-                    "app_id": health_data.get("app_id", "everos"),
-                    "project_id": health_data.get("project_id", "default"),
+                    "latency": latency_ms,
+                    "app_id": health_data.get("app_id", app_id),
+                    "project_id": health_data.get("project_id", project_id),
                     "stats": stats,
                 }
             except Exception as e:
-                return {"healthy": False, "error": str(e), "base_url": base_url, "stats": {}}
+                latency_ms = int((time.monotonic() - t0) * 1000)
+                return {
+                    "healthy": False,
+                    "error": str(e),
+                    "base_url": base_url,
+                    "latency": latency_ms,
+                    "stats": {},
+                }
 
         @self.app.get("/api/everos/memories")
         async def api_memories():
             """获取各类型记忆（最近活动）。"""
             client = self._get_client()
             base_url = self._get_everos_url()
-            candidate_uids = [
-                self.config.get("app_id", "astrbot"),
-                "default", "webui",
-            ]
+            app_id = self._get_app_id()
+            project_id = self._get_project_id()
+            candidate_uids = self._get_candidate_uids()
             try:
                 all_items = []
                 seen_ids = set()
@@ -220,8 +254,8 @@ class StandaloneServer:
                                 json={
                                     "memory_type": mtype,
                                     owner_field: uid,
-                                    "app_id": "astrbot",
-                                    "project_id": "default",
+                                    "app_id": app_id,
+                                    "project_id": project_id,
                                 },
                             )
                             data = r.json()
@@ -251,11 +285,13 @@ class StandaloneServer:
             user_id = body.get("user_id", "webui")
             client = self._get_client()
             base_url = self._get_everos_url()
+            app_id = self._get_app_id()
+            project_id = self._get_project_id()
 
             payload = {
                 "session_id": f"webui_{user_id}",
-                "app_id": self.config.get("app_id", "astrbot"),
-                "project_id": self.config.get("project_id", "default"),
+                "app_id": app_id,
+                "project_id": project_id,
                 "messages": [{
                     "sender_id": user_id,
                     "role": "user",
@@ -271,8 +307,8 @@ class StandaloneServer:
                     f"{base_url}/api/v1/memory/flush",
                     json={
                         "session_id": f"webui_{user_id}",
-                        "app_id": self.config.get("app_id", "astrbot"),
-                        "project_id": self.config.get("project_id", "default"),
+                        "app_id": app_id,
+                        "project_id": project_id,
                     },
                 )
                 return {"ok": True, "status": "ok", "message": "记忆已写入", "data": result}
@@ -287,12 +323,11 @@ class StandaloneServer:
             # 旧版兼容：atomic_fact 已合并到 episode
             _COMPAT = {"atomic_fact": "episode"}
             memory_type = _COMPAT.get(raw_type, raw_type)
-            candidate_uids = [
-                self.config.get("app_id", "astrbot"),
-                "default", "webui",
-            ]
+            candidate_uids = self._get_candidate_uids()
             client = self._get_client()
             base_url = self._get_everos_url()
+            app_id = self._get_app_id()
+            project_id = self._get_project_id()
             agent_kinds = {"agent_case", "agent_skill"}
             try:
                 all_items = []
@@ -306,8 +341,8 @@ class StandaloneServer:
                             json={
                                 "memory_type": memory_type,
                                 owner_field: uid,
-                                "app_id": "astrbot",
-                                "project_id": "default",
+                                "app_id": app_id,
+                                "project_id": project_id,
                             },
                         )
                         r.raise_for_status()
@@ -336,13 +371,15 @@ class StandaloneServer:
             session_id = body.get("session_id", "default_dialog")
             client = self._get_client()
             base_url = self._get_everos_url()
+            app_id = self._get_app_id()
+            project_id = self._get_project_id()
             try:
                 resp = await client.post(
                     f"{base_url}/api/v1/memory/flush",
                     json={
                         "session_id": session_id,
-                        "app_id": self.config.get("app_id", "astrbot"),
-                        "project_id": self.config.get("project_id", "default"),
+                        "app_id": app_id,
+                        "project_id": project_id,
                     },
                 )
                 resp.raise_for_status()
@@ -356,16 +393,15 @@ class StandaloneServer:
             body = await request.json()
             query = body.get("query", "")
             top_k = body.get("top_k", 10)
-            candidate_uids = [
-                self.config.get("app_id", "astrbot"),
-                "default", "webui",
-            ]
+            candidate_uids = self._get_candidate_uids()
+            app_id = self._get_app_id()
+            project_id = self._get_project_id()
             client = self._get_client()
             base_url = self._get_everos_url()
             try:
                 all_items = []
                 seen_ids = set()
-                per_uid = max(1, top_k // len(candidate_uids))
+                per_uid = max(1, top_k // max(len(candidate_uids), 1))
                 for uid in candidate_uids:
                     try:
                         resp = await client.post(
@@ -373,8 +409,8 @@ class StandaloneServer:
                             json={
                                 "query": query,
                                 "user_id": uid,
-                                "app_id": self.config.get("app_id", "astrbot"),
-                                "project_id": self.config.get("project_id", "default"),
+                                "app_id": app_id,
+                                "project_id": project_id,
                                 "top_k": per_uid,
                             },
                         )

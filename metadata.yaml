@@ -1,6 +1,6 @@
-name: astrbot_plugin_everos_integration
-version: 1.1.0
-author: 白芷 & Masumeiki & czqwq(自用临时修复)
+name: astrbot_plugin_everos_integration_rework
+version: 1.2.0
+author: (原作者:白芷 & Masumeiki) & czqwq(自用临时修复)
 description: 为 AstrBot 集成 EverOS 自进化记忆引擎，让 Agent 拥有长期记忆与自我学习能力。
 icon: logo.png
-repo: https://github.com/czqwq/astrbot_plugin_everos_integration
+repo: https://github.com/czqwq/astrbot_plugin_everos_integration_rework

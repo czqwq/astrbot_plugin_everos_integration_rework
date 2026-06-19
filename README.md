@@ -1,4 +1,5 @@
 # EverOS for AstrBot
+**原仓库的代码水平烂的一批,针对新api一堆报错,rework版估计能适配新api,至少自用没问题**
 
 **为 AstrBot 集成 EverOS 自进化记忆引擎，让 Agent 拥有长期记忆与自我学习能力。**
 

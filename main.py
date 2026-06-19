@@ -505,6 +505,9 @@ class EverOSIntegrationPlugin(Star):
 
         包含：配置的 app_id、常见默认值、持久化的已知用户 ID、
         以及配置中手动指定的 extra_user_ids。
+
+        每次调用都会重新读取持久化文件，确保 LLM 工具写入的新 ID
+        能被 Dashboard 立即发现（不依赖插件重启）。
         """
         base = [
             self.config.app_id,
@@ -512,11 +515,21 @@ class EverOSIntegrationPlugin(Star):
             "webui",
             "assistant",
         ]
-        # 持久化的已知用户 ID（从聊天中追踪）
+        # 1. 从持久化文件读取（包含 LLM 工具写入的最新 ID）
+        try:
+            if self._known_users_path.exists():
+                data = json.loads(self._known_users_path.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    for uid in data:
+                        if uid not in base:
+                            base.append(uid)
+        except Exception:
+            pass
+        # 2. 合并内存中的已知用户 ID（/everos 命令追踪的）
         for uid in sorted(self._known_user_ids):
             if uid not in base:
                 base.append(uid)
-        # 配置中手动指定的额外 user_id
+        # 3. 配置中手动指定的额外 user_id
         extra = self.config.get("extra_user_ids", "")
         if extra and isinstance(extra, str) and extra.strip():
             for uid in extra.split(","):

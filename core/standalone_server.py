@@ -144,7 +144,9 @@ class StandaloneServer:
 
         包含：配置的 app_id、常见默认值、持久化的已知用户 ID、
         以及配置中手动指定的 extra_user_ids。
-        去重并保持优先级顺序。
+
+        每次调用都会重新读取持久化文件，确保 LLM 工具写入的新 ID
+        能被 Dashboard 立即发现。
         """
         base = [
             self.config.get("app_id", "astrbot"),
@@ -152,7 +154,18 @@ class StandaloneServer:
             "webui",
             "assistant",
         ]
-        # 追加插件追踪到的真实用户 ID（如 QQ 号，含持久化存储）
+        # 1. 从持久化文件读取（包含 LLM 工具写入的最新 ID）
+        try:
+            known_file = Path(self.plugin.data_dir) / "everos_known_users.json"
+            if known_file.exists():
+                data = json.loads(known_file.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    for uid in data:
+                        if uid not in base:
+                            base.append(uid)
+        except Exception:
+            pass
+        # 2. 合并内存中的已知用户 ID（/everos 命令追踪的）
         try:
             tracked = getattr(self.plugin, "_known_user_ids", None)
             if tracked:
@@ -161,7 +174,7 @@ class StandaloneServer:
                         base.append(uid)
         except Exception:
             pass
-        # 配置中手动指定的额外 user_id
+        # 3. 配置中手动指定的额外 user_id
         extra = self.config.get("extra_user_ids", "")
         if extra and isinstance(extra, str) and extra.strip():
             for uid in extra.split(","):

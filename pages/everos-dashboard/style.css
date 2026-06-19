@@ -773,7 +773,8 @@ body {
   letter-spacing: 0.03em;
 }
 .activity-item__tag.episode { background: rgba(59,130,246,0.1); color: var(--blue); }
-.activity-item__tag.atomic_fact { background: rgba(139,92,246,0.1); color: var(--purple); }
+.activity-item__tag.atomic_fact,
+.activity-item__tag.profile { background: rgba(139,92,246,0.1); color: var(--purple); }
 .activity-item__tag.agent_case { background: rgba(245,158,11,0.1); color: var(--amber); }
 .activity-item__tag.agent_skill { background: rgba(16,185,129,0.1); color: var(--green); }
 .activity-item__time {
@@ -946,7 +947,8 @@ body {
   margin-top: 2px;
 }
 .mem-item__type.episode { background: rgba(59,130,246,0.1); color: var(--blue); }
-.mem-item__type.atomic_fact { background: rgba(139,92,246,0.1); color: var(--purple); }
+.mem-item__type.atomic_fact,
+.mem-item__type.profile { background: rgba(139,92,246,0.1); color: var(--purple); }
 .mem-item__type.agent_case { background: rgba(245,158,11,0.1); color: var(--amber); }
 .mem-item__type.agent_skill { background: rgba(16,185,129,0.1); color: var(--green); }
 .mem-item__content {
@@ -1109,7 +1111,8 @@ body {
   color: var(--primary);
 }
 .search-item__type.episode { background: rgba(59,130,246,0.1); color: var(--blue); }
-.search-item__type.atomic_fact { background: rgba(139,92,246,0.1); color: var(--purple); }
+.search-item__type.atomic_fact,
+.search-item__type.profile { background: rgba(139,92,246,0.1); color: var(--purple); }
 .search-item__type.agent_case { background: rgba(245,158,11,0.1); color: var(--amber); }
 .search-item__type.agent_skill { background: rgba(16,185,129,0.1); color: var(--green); }
 .search-item__score {

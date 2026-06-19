@@ -119,6 +119,20 @@ class EverOSClient:
         resp.raise_for_status()
         return resp.json()
 
+    # 旧版 memory_type → 新版映射（向后兼容）
+    _MEMORY_TYPE_COMPAT: dict[str, str] = {
+        "atomic_fact": "episode",  # EverOS v1.0 已将 atomic_fact 合并到 episode
+    }
+
+    @staticmethod
+    def _normalize_memory_type(memory_type: str) -> str:
+        """将旧版 memory_type 映射为当前 API 支持的合法值。
+
+        EverOS ``/api/v1/memory/get`` 仅接受：
+        episode / profile / agent_case / agent_skill。
+        """
+        return EverOSClient._MEMORY_TYPE_COMPAT.get(memory_type, memory_type)
+
     @staticmethod
     def _owner_id_for(memory_type: str, user_id: str = "", agent_id: str = "") -> tuple[str, str]:
         """根据 memory_type 决定使用 user_id 还是 agent_id。
@@ -131,8 +145,10 @@ class EverOSClient:
         Returns:
             (owner_field_name, owner_id_value)
         """
+        # 先做兼容映射，再判断轨道
+        normalized = EverOSClient._normalize_memory_type(memory_type)
         agent_kinds = frozenset({"agent_case", "agent_skill"})
-        if memory_type in agent_kinds:
+        if normalized in agent_kinds:
             return ("agent_id", agent_id or "default")
         return ("user_id", user_id or "default")
 
@@ -151,11 +167,12 @@ class EverOSClient:
 
         memory_type: episode / profile / agent_case / agent_skill
         """
+        normalized_type = self._normalize_memory_type(memory_type)
         owner_field, owner_value = self._owner_id_for(
             memory_type, user_id=user_id, agent_id=agent_id
         )
         payload: dict[str, Any] = {
-            "memory_type": memory_type,
+            "memory_type": normalized_type,
             owner_field: owner_value,
             "app_id": app_id,
             "project_id": project_id,

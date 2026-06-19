@@ -154,7 +154,7 @@ async function loadOverview() {
     const stats = data.stats || {};
     const keys = [
       { key: 'episode', id: 'v-episode', bar: 'bar-episode', color: 'var(--blue)' },
-      { key: 'atomic_fact', id: 'v-fact', bar: 'bar-fact', color: 'var(--purple)' },
+      { key: 'profile', id: 'v-profile', bar: 'bar-profile', color: 'var(--purple)' },
       { key: 'agent_case', id: 'v-case', bar: 'bar-case', color: 'var(--amber)' },
       { key: 'agent_skill', id: 'v-skill', bar: 'bar-skill', color: 'var(--green)' },
     ];
@@ -304,7 +304,7 @@ function setupQuickActions() {
 // ═══ 记忆仓库 ──────────────────────────────────────────────────
 
 let currentFilter = 'all';
-let memStats = { episode: 0, atomic_fact: 0, agent_case: 0, agent_skill: 0 };
+let memStats = { episode: 0, profile: 0, agent_case: 0, agent_skill: 0 };
 
 // ─── 分页状态 ────────────────────────────────────────────────
 let _allItems = [];
@@ -441,7 +441,7 @@ async function loadMemories(type) {
 async function loadMemStats() {
   try {
     // 逐个获取各类型计数
-    const types = ['episode', 'atomic_fact', 'agent_case', 'agent_skill', 'profile'];
+    const types = ['episode', 'profile', 'agent_case', 'agent_skill'];
     for (const t of types) {
       const data = await API.post('memories-by-type', { memory_type: t });
       const items = unwrapItems(data);
@@ -449,9 +449,8 @@ async function loadMemStats() {
       memStats[t] = total;
       // 更新 filter-count
       const idMap = {
-        episode: 'f-episode', atomic_fact: 'f-fact',
+        episode: 'f-episode', profile: 'f-profile',
         agent_case: 'f-case', agent_skill: 'f-skill',
-        profile: 'f-profile',
       };
       const countEl = $(idMap[t]);
       if (countEl) countEl.textContent = total > 0 ? total : '';
@@ -480,7 +479,7 @@ function showWritePanel() {
       '</div>' +
       '<div class="write-panel__body">' +
         '<select id="write-type" class="input">' +
-          '<option value="atomic_fact">Facts · 事实</option>' +
+          '<option value="profile">Profiles · 画像</option>' +
           '<option value="episode">Episodes · 片段</option>' +
           '<option value="agent_case">Cases · 案例</option>' +
           '<option value="agent_skill">Skills · 技能</option>' +

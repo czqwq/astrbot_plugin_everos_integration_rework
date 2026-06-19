@@ -247,7 +247,7 @@ class StandaloneServer:
             """写入记忆。"""
             body = await request.json()
             content = body.get("content", "")
-            memory_type = body.get("memory_type", "atomic_fact")
+            memory_type = body.get("memory_type", "episode")
             user_id = body.get("user_id", "webui")
             client = self._get_client()
             base_url = self._get_everos_url()

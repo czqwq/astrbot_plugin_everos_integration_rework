@@ -150,7 +150,7 @@ async def proxy_memorize(request: Request):
     """写入记忆（简化的单条接口）。"""
     body = await request.json()
     content = body.get("content", "")
-    memory_type = body.get("memory_type", "atomic_fact")
+    memory_type = body.get("memory_type", "episode")
     user_id = body.get("user_id", "webui")
 
     client = get_client()

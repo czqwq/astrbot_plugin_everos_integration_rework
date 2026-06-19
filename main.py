@@ -337,7 +337,7 @@ class EverOSIntegrationPlugin(Star):
                 try:
                     result = await self._client.memory_get(
                         memory_type=memory_type,
-                        user_id=uid,
+                        user_id=uid, agent_id=uid,
                     )
                     if isinstance(result, dict):
                         data = result.get("data", result)

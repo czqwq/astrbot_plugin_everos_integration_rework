@@ -188,7 +188,10 @@ async def proxy_memorize(request: Request):
 async def proxy_memories_by_type(request: Request):
     """按类型获取记忆。"""
     body = await request.json()
-    memory_type = body.get("memory_type", "episode")
+    raw_type = body.get("memory_type", "episode")
+    # 旧版兼容：atomic_fact 已合并到 episode
+    _COMPAT = {"atomic_fact": "episode"}
+    memory_type = _COMPAT.get(raw_type, raw_type)
     limit = body.get("limit", 20)
     page_size = min(limit, 100)
 

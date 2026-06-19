@@ -148,7 +148,7 @@ class EverOSIntegrationPlugin(Star):
                     for uid in candidate_uids:
                         try:
                             result = await self._client.memory_get(
-                                memory_type=mtype, user_id=uid,
+                                memory_type=mtype, user_id=uid, agent_id=uid,
                             )
                             if isinstance(result, dict):
                                 data = result.get("data", result)
@@ -588,16 +588,20 @@ class EverOSIntegrationPlugin(Star):
             import httpx
             async with httpx.AsyncClient(timeout=15) as c:
                 stats = {}
+                agent_kinds = {"agent_case", "agent_skill"}
                 for mtype, uid in [
                     ("episode", "default"), ("profile", "default"),
                     ("agent_case", "default"), ("agent_skill", "default"),
                 ]:
+                    # agent_skill / agent_case 必须用 agent_id，
+                    # episode / profile 必须用 user_id（EverOS API 互斥约束）
+                    owner_field = "agent_id" if mtype in agent_kinds else "user_id"
                     try:
                         resp = await c.post(
                             f"{self.config.everos_base_url}/api/v1/memory/get",
                             json={
                                 "memory_type": mtype,
-                                "user_id": uid,
+                                owner_field: uid,
                                 "app_id": self.config.app_id,
                                 "project_id": self.config.project_id,
                             },

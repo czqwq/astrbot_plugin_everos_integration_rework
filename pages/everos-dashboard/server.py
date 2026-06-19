@@ -115,13 +115,16 @@ async def proxy_status():
         # 获取统计
         stats = {}
         candidate_uids = ["default"]
+        agent_kinds = {"agent_case", "agent_skill"}
         for mtype in ("episode", "profile", "agent_case", "agent_skill"):
             total = 0
             for uid in candidate_uids:
+                # agent_skill / agent_case 用 agent_id，其余用 user_id
+                owner_field = "agent_id" if mtype in agent_kinds else "user_id"
                 try:
                     r = await client.post(
                         f"{EVEROS_BASE_URL}/api/v1/memory/get",
-                        json={"memory_type": mtype, "user_id": uid},
+                        json={"memory_type": mtype, owner_field: uid},
                     )
                     data = r.json()
                     items = data.get("data", {}).get(mtype + "s", [])
@@ -187,12 +190,20 @@ async def proxy_memories_by_type(request: Request):
     body = await request.json()
     memory_type = body.get("memory_type", "episode")
     limit = body.get("limit", 20)
+    page_size = min(limit, 100)
 
     client = get_client()
+    # agent_skill / agent_case 用 agent_id，其余用 user_id
+    agent_kinds = {"agent_case", "agent_skill"}
+    owner_field = "agent_id" if memory_type in agent_kinds else "user_id"
     try:
         resp = await client.post(
             f"{EVEROS_BASE_URL}/api/v1/memory/get",
-            json={"memory_type": memory_type, "limit": limit, "offset": 0},
+            json={
+                "memory_type": memory_type,
+                owner_field: "default",
+                "page_size": page_size,
+            },
         )
         resp.raise_for_status()
         data = resp.json()

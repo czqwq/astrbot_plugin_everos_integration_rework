@@ -153,16 +153,19 @@ class StandaloneServer:
                     self.config.get("app_id", "astrbot"),
                     "default", "webui",
                 ]
+                agent_kinds = {"agent_case", "agent_skill"}
                 for mtype in ("episode", "profile", "agent_case", "agent_skill"):
                     total = 0
                     seen_ids = set()
                     for uid in candidate_uids:
+                        # agent_skill / agent_case 用 agent_id，其余用 user_id
+                        owner_field = "agent_id" if mtype in agent_kinds else "user_id"
                         try:
                             r = await client.post(
                                 f"{base_url}/api/v1/memory/get",
                                 json={
                                     "memory_type": mtype,
-                                    "user_id": uid,
+                                    owner_field: uid,
                                     "app_id": "astrbot",
                                     "project_id": "default",
                                 },
@@ -206,14 +209,17 @@ class StandaloneServer:
             try:
                 all_items = []
                 seen_ids = set()
+                agent_kinds = {"agent_case", "agent_skill"}
                 for mtype in ("episode", "profile", "agent_case", "agent_skill"):
                     for uid in candidate_uids:
+                        # agent_skill / agent_case 用 agent_id，其余用 user_id
+                        owner_field = "agent_id" if mtype in agent_kinds else "user_id"
                         try:
                             r = await client.post(
                                 f"{base_url}/api/v1/memory/get",
                                 json={
                                     "memory_type": mtype,
-                                    "user_id": uid,
+                                    owner_field: uid,
                                     "app_id": "astrbot",
                                     "project_id": "default",
                                 },
@@ -284,16 +290,19 @@ class StandaloneServer:
             ]
             client = self._get_client()
             base_url = self._get_everos_url()
+            agent_kinds = {"agent_case", "agent_skill"}
             try:
                 all_items = []
                 seen_ids = set()
                 for uid in candidate_uids:
+                    # agent_skill / agent_case 用 agent_id，其余用 user_id
+                    owner_field = "agent_id" if memory_type in agent_kinds else "user_id"
                     try:
                         r = await client.post(
                             f"{base_url}/api/v1/memory/get",
                             json={
                                 "memory_type": memory_type,
-                                "user_id": uid,
+                                owner_field: uid,
                                 "app_id": "astrbot",
                                 "project_id": "default",
                             },

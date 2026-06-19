@@ -119,21 +119,44 @@ class EverOSClient:
         resp.raise_for_status()
         return resp.json()
 
+    @staticmethod
+    def _owner_id_for(memory_type: str, user_id: str = "", agent_id: str = "") -> tuple[str, str]:
+        """根据 memory_type 决定使用 user_id 还是 agent_id。
+
+        EverOS API 的 GetRequest 要求：
+        - episode / profile → user_id（user 轨道）
+        - agent_case / agent_skill → agent_id（agent 轨道）
+        两者互斥。
+
+        Returns:
+            (owner_field_name, owner_id_value)
+        """
+        agent_kinds = frozenset({"agent_case", "agent_skill"})
+        if memory_type in agent_kinds:
+            return ("agent_id", agent_id or "default")
+        return ("user_id", user_id or "default")
+
     async def memory_get(
         self,
         memory_type: str = "episode",
         user_id: str = "default",
+        agent_id: str = "",
         app_id: str = "astrbot",
         project_id: str = "default",
     ) -> dict[str, Any]:
         """POST /api/v1/memory/get
 
-        检索记忆。EverOS API 需要 user_id，不接受 limit/offset。
-        memory_type: episode / atomic_fact / agent_case / agent_skill / user_profile / foresight
+        检索记忆。根据 memory_type 自动选择 user_id（user 轨道）
+        或 agent_id（agent 轨道），两者互斥。
+
+        memory_type: episode / profile / agent_case / agent_skill
         """
+        owner_field, owner_value = self._owner_id_for(
+            memory_type, user_id=user_id, agent_id=agent_id
+        )
         payload: dict[str, Any] = {
             "memory_type": memory_type,
-            "user_id": user_id,
+            owner_field: owner_value,
             "app_id": app_id,
             "project_id": project_id,
         }
@@ -148,18 +171,25 @@ class EverOSClient:
     async def stats(
         self,
         user_id: str = "default",
+        agent_id: str = "",
         app_id: str = "astrbot",
         project_id: str = "default",
     ) -> dict[str, int]:
-        """获取各 memory_type 的条目计数。"""
+        """获取各 memory_type 的条目计数。
+
+        自动根据 memory_type 选择 user_id（user 轨道）或 agent_id（agent 轨道）。
+        """
         count_map: dict[str, int] = {}
         for mtype in ("episode", "profile", "agent_case", "agent_skill"):
+            owner_field, owner_value = self._owner_id_for(
+                mtype, user_id=user_id, agent_id=agent_id
+            )
             try:
                 data = await self._client.post(
                     f"{self.base_url}/api/v1/memory/get",
                     json={
                         "memory_type": mtype,
-                        "user_id": user_id,
+                        owner_field: owner_value,
                         "app_id": app_id,
                         "project_id": project_id,
                     },

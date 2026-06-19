@@ -27,6 +27,7 @@ from quart import jsonify, request
 from .core.config_manager import ConfigManager
 from .core.everos_client import EverOSClient
 from .core.standalone_server import StandaloneServer
+from .tools import everos_tools as everos_tools_module
 from .tools.everos_tools import EverOSLearnTool, EverOSMemorizeTool, EverOSRecallTool
 
 PLUGIN_NAME = "astrbot_plugin_everos_integration"
@@ -82,6 +83,8 @@ class EverOSIntegrationPlugin(Star):
         self.context = context
         self.config = ConfigManager(config or {})
         self.data_dir = str(StarTools.get_data_dir())
+        # 注入到工具模块，避免子模块调用 StarTools.get_data_dir() 失败
+        everos_tools_module.set_data_dir(self.data_dir)
 
         # 运行时状态
         self._client: EverOSClient | None = None

@@ -7,12 +7,26 @@ import time
 from pathlib import Path
 
 from astrbot.api import logger
-from astrbot.api.star import StarTools
 
 from ..core.config_manager import ConfigManager
 from ..core.everos_client import EverOSClient
 
 _KNOWN_USERS_FILE = "everos_known_users.json"
+
+# 由插件主类在 init 时注入（避免 StarTools.get_data_dir() 在子模块中失败）
+_data_dir: str | None = None
+
+
+def set_data_dir(path: str) -> None:
+    """由插件主类调用，注入数据目录路径。
+
+    StarTools.get_data_dir() 通过 inspect + star_map 查找调用者元数据，
+    但 star_map 只注册了插件主模块（如 ``astrbot_plugin_xxx``），
+    子模块（如 ``astrbot_plugin_xxx.tools.everos_tools``）不在其中，
+    导致 RuntimeError。因此改为由插件显式注入。
+    """
+    global _data_dir
+    _data_dir = path
 
 
 def _track_user_to_file(user_id: str) -> None:
@@ -22,9 +36,11 @@ def _track_user_to_file(user_id: str) -> None:
     """
     if not user_id or user_id in ("default", "webui"):
         return
+    if not _data_dir:
+        logger.warning("[EverOS] 数据目录未注入，跳过用户 ID 持久化")
+        return
     try:
-        data_dir = Path(StarTools.get_data_dir())
-        path = data_dir / _KNOWN_USERS_FILE
+        path = Path(_data_dir) / _KNOWN_USERS_FILE
         known: set[str] = set()
         if path.exists():
             try:

@@ -438,7 +438,41 @@ LLM 工具每次调用 `memory_add` 后立即调用 `memory_flush`（`is_final=T
 
 ---
 
-## 七、后续建议
+## ⚠️ 重要注意事项：`_conf_schema.json`
+
+### AstrBot 配置加载机制
+
+```
+_conf_schema.json（Schema 定义）
+    ↓ AstrBot StarManager 解析
+AstrBotConfig(config_path=data/config/<plugin>_config.json, schema=<schema>)
+    ↓ 合并用户保存值 + schema 默认值
+Star.__init__(context, config)  ← config 是合并后的 dict
+    ↓
+ConfigManager(raw=config) + _DEFAULTS 兜底
+```
+
+**关键规则：只有 `_conf_schema.json` 中定义的配置项才会出现在 WebUI 编辑列表中。**
+不在 schema 中的项，AstrBot 不会写入 `xxx_config.json`，用户也无法通过 WebUI 修改。
+
+### 新增配置项清单（已全部加入 `_conf_schema.json`）
+
+| 配置项 | 类型 | 默认值 | 用途 |
+|--------|------|--------|------|
+| `force_memory_recall` | `bool` | `false` | 强制 LLM 思考前检索记忆 |
+| `extra_user_ids` | `string` | `""` | 手动指定额外查询用户 ID |
+| `boundary_token_limit` | `int` | `65536` | 边界检测 Token 上限 |
+| `boundary_msg_limit` | `int` | `500` | 边界检测消息条数上限 |
+
+### 修改插件配置时的注意事项
+
+1. **`_DEFAULTS`（`config_manager.py`）** — 代码级默认值。当 `_conf_schema.json` 未定义或用户未配置时生效。
+2. **`_conf_schema.json`** — WebUI Schema。决定哪些配置项在管理面板可见、可编辑。
+3. **两者必须同步**：新增配置项需要同时更新这两个文件，否则 WebUI 不可见，用户只能改 JSON 文件。
+
+---
+
+## 八、后续建议
 
 1. **EverOS 服务端增强**：添加 `GET /api/v1/memory/owners` 端点，返回所有存在的 owner_id 列表（通过扫描 markdown 目录），让 Dashboard 能自主发现所有用户
 2. **Dashboard 实时性**：当前需手动刷新；可接入 WebSocket 或 SSE 推送 Cascade 同步事件

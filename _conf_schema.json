@@ -7,7 +7,7 @@
   },
   "enable_tools": {
     "description": "启用 LLM 工具",
-    "hint": "开启后 Agent 可使用 everos_memorize / everos_recall 工具",
+    "hint": "开启后 Agent 可使用 everos_memorize / everos_recall / everos_learn 工具",
     "type": "bool",
     "default": true
   },
@@ -50,5 +50,29 @@
     "hint": "在此列表里的人格使用独立记忆空间，列表外的人格共享全部记忆。例如：助手A,助手B",
     "type": "string",
     "default": ""
+  },
+  "force_memory_recall": {
+    "description": "强制记忆检索（RAG 预处理）",
+    "hint": "开启后，每次 LLM 被调用前会自动以用户消息为查询词检索 EverOS 记忆，并将上下文注入系统提示词。关闭则 LLM 自行决定是否调用记忆工具。",
+    "type": "bool",
+    "default": false
+  },
+  "extra_user_ids": {
+    "description": "额外查询用户 ID（逗号分隔）",
+    "hint": "Dashboard 使用此列表扩展记忆查询范围。当 LLM 工具以 QQ 号等自定义 user_id 保存记忆后，需在此添加对应 ID 才能被 Dashboard 检索到。例如：1638501774,1234567890",
+    "type": "string",
+    "default": ""
+  },
+  "boundary_token_limit": {
+    "description": "边界检测 Token 上限",
+    "hint": "对应 EverOS default.toml [boundary_detection].hard_token_limit。当缓冲区积累消息的 token 数超过此值时自动触发记忆提取。默认 65536（64K）。",
+    "type": "int",
+    "default": 65536
+  },
+  "boundary_msg_limit": {
+    "description": "边界检测消息条数上限",
+    "hint": "对应 EverOS default.toml [boundary_detection].hard_msg_limit。当缓冲区积累消息条数超过此值时自动触发记忆提取。默认 500。",
+    "type": "int",
+    "default": 500
   }
 }

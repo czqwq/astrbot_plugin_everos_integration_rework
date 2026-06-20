@@ -654,11 +654,19 @@ class EverOSIntegrationPlugin(Star):
                 if flush_status == "extracted":
                     lines.append(f"\n✨ 本次有新的记忆被提炼出来！")
                 else:
-                    lines.append(f"\n⏳ 消息还在积累中（未达到边界检测阈值），继续聊会自然触发提炼")
+                    token_k = self.config.boundary_token_limit // 1024
+                    lines.append(
+                        f"\n⏳ 消息还在积累中（未达到边界检测阈值 "
+                        f"{self.config.boundary_msg_limit} 条 / {token_k}K token），"
+                        f"继续聊会自然触发提炼"
+                    )
                 yield event.plain_result("\n".join(lines))
             else:
+                token_k = self.config.boundary_token_limit // 1024
                 yield event.plain_result(
-                    f"⏳ 缓冲区暂无足够消息触发提炼（状态: {flush_status}），继续聊天积累到 50 条/8192 token 后自动触发"
+                    f"⏳ 缓冲区暂无足够消息触发提炼（状态: {flush_status}），"
+                    f"继续聊天积累到 {self.config.boundary_msg_limit} 条 / "
+                    f"{token_k}K token 后自动触发"
                 )
 
         except Exception as e:

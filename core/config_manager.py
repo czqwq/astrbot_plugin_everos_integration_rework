@@ -15,6 +15,9 @@ _DEFAULTS: dict[str, Any] = {
     "standalone_webui_port": 18766,
     "isolation_personas": "",
     "extra_user_ids": "",
+    # EverOS 边界检测阈值（与 EverOS default.toml [boundary_detection] 保持一致）
+    "boundary_token_limit": 65536,
+    "boundary_msg_limit": 500,
 }
 
 
@@ -54,6 +57,16 @@ class ConfigManager:
         if not raw or not raw.strip():
             return []
         return [uid.strip() for uid in raw.split(",") if uid.strip()]
+
+    @property
+    def boundary_token_limit(self) -> int:
+        """EverOS 边界检测的 token 硬上限（与 EverOS [boundary_detection] 一致）。"""
+        return int(self.get("boundary_token_limit", 65536))
+
+    @property
+    def boundary_msg_limit(self) -> int:
+        """EverOS 边界检测的消息条数硬上限（与 EverOS [boundary_detection] 一致）。"""
+        return int(self.get("boundary_msg_limit", 500))
 
     @property
     def isolation_personas(self) -> list[str]:

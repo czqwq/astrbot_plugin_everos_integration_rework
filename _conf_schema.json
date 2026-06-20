@@ -51,11 +51,33 @@
     "type": "string",
     "default": ""
   },
-  "force_memory_recall": {
-    "description": "强制记忆检索（RAG 预处理）",
-    "hint": "开启后，每次 LLM 被调用前会自动以用户消息为查询词检索 EverOS 记忆，并将上下文注入系统提示词。关闭则 LLM 自行决定是否调用记忆工具。",
-    "type": "bool",
-    "default": false
+  "recall_mode": {
+    "description": "记忆检索模式",
+    "hint": "off=关闭。force=每次强制检索。planner=由 LLM 判断是否需要检索（在思索链之前，不影响主 LLM 响应速度）。",
+    "type": "string",
+    "default": "off",
+    "options": ["off", "force", "planner"]
+  },
+  "recall_planner_provider": {
+    "description": "记忆检索决策 LLM 提供商",
+    "hint": "仅 recall_mode=planner 时生效。用于轻量判断是否需要检索记忆。留空使用主提供商。建议选择便宜快速的模型（如 gpt-4o-mini）。",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "save_mode": {
+    "description": "记忆保存模式",
+    "hint": "off=关闭。force=每次强制保存。planner=由 LLM 判断用户发言是否值得保存（在思索链之前）。",
+    "type": "string",
+    "default": "off",
+    "options": ["off", "force", "planner"]
+  },
+  "save_planner_provider": {
+    "description": "记忆保存决策 LLM 提供商",
+    "hint": "仅 save_mode=planner 时生效。用于轻量判断用户发言是否值得保存。留空使用主提供商。建议选择便宜快速的模型。",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider"
   },
   "extra_user_ids": {
     "description": "额外查询用户 ID（逗号分隔）",

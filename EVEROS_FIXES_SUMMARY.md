@@ -392,49 +392,74 @@ LLM 工具每次调用 `memory_add` 后立即调用 `memory_flush`（`is_final=T
 
 ---
 
-## 新增功能：强制记忆检索（RAG 预处理）
+## 新增功能：Planner 决策系统（recall + save，思索链之前）
 
-### 功能说明
+### 功能概述
 
-`force_memory_recall` 开关（默认关闭）。开启后，每次 LLM 被调用前，插件会**自动以用户消息为查询词检索 EverOS 记忆库**，并将结果注入到系统提示词中。LLM 在思考前就能「看到」相关历史上下文，不依赖它主动调用 `everos_recall` 工具。
+用轻量 LLM 在主 LLM 思索链**之前**完成两个决策：
+1. **Recall**：是否需要从记忆中检索上下文
+2. **Save**：用户发言是否值得保存到长期记忆
 
-### 配置方式
+每个功能支持三种模式：`off` / `force` / `planner`。`planner` 模式使用独立配置的 LLM 提供商（可选用便宜快速的模型），通过极简 system prompt 约束仅回复 JSON，超时 5 秒兜底。
 
-```json
-{
-    "force_memory_recall": true
-}
+### 配置项
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `recall_mode` | `options` | `"off"` | off/force/planner |
+| `recall_planner_provider` | `select_provider` | `""` | planner 模式使用的 LLM（空=主提供商） |
+| `save_mode` | `options` | `"off"` | off/force/planner |
+| `save_planner_provider` | `select_provider` | `""` | planner 模式使用的 LLM（空=主提供商） |
+
+### 执行流程
+
+```
+用户消息到达
+  → OnLLMRequestEvent
+  → Planner.recall_decision(user_query)
+      system: "你是决策助手。仅回复 JSON: {action, query}"
+      → action="recall" + query → 执行记忆检索 → 注入 system_prompt
+      → action="skip" → 不做任何事
+  → Planner.save_decision(user_query)
+      system: "你是决策助手。仅回复 JSON: {action, content}"
+      → action="save" + content → 写入 EverOS 记忆
+      → action="skip" → 不做任何事
+  → 主 LLM 调用（带着注入的记忆上下文）
 ```
 
-或在 AstrBot 插件配置页面勾选。
+### Planner 提示词
 
-### 技术实现
-
-使用 AstrBot 的 `OnLLMRequestEvent` 钩子：
-
+**Recall Planner**：
 ```
-用户消息 → Pipeline → OnLLMRequestEvent
-    → _on_llm_request_pre_recall()
-    → 提取 req.prompt / req.contexts 中的用户查询
-    → 调用 EverOS /api/v1/memory/search（覆盖所有 candidate_uids）
-    → 检索到记忆 → 注入 req.system_prompt 末尾
-    → 未检索到 → 静默跳过，LLM 正常思考
+你是一个记忆检索决策助手。分析用户消息，判断是否需要从长期记忆中检索信息。
+- 用户问题需要个人信息/偏好/历史 → recall
+- 简单问候/闲聊 → skip
+仅回复 JSON: {"action": "recall"|"skip", "query": "..."}
 ```
 
-注入格式：
+**Save Planner**：
 ```
-[EverOS 记忆检索结果 — 请在回答时参考以下上下文]
-1. [episode] 用户czqwq的中文名是莉莉丝...
-2. [profile] 用户偏好：喜欢喝冰美式，不加糖...
-[/EverOS 记忆检索结果]
+你是一个记忆保存决策助手。分析用户消息，判断是否有值得保存的信息。
+- 用户透露个人信息/偏好/计划 → save
+- 简单问候/闲聊 → skip
+仅回复 JSON: {"action": "save"|"skip", "content": "..."}
 ```
 
-### 关键文件
+### 设计要点
+
+- **思索链之前**：recall 和 save 都在 `OnLLMRequestEvent` 中完成，主 LLM 调用前所有决策已完成
+- **5 秒超时**：planner 调用有超时保护，超时自动 skip，不影响用户体验
+- **JSON 容错**：支持从 planner 回复中提取 JSON 块，格式偏差可容错
+- **独立提供商**：可选用便宜模型（如 gpt-4o-mini）做决策，成本极低
+
+### 修改文件
 
 | 文件 | 变更 |
 |------|------|
-| `core/config_manager.py` | 新增 `force_memory_recall` 配置项及属性 |
-| `main.py` | 新增 `_on_llm_request_pre_recall()` — `@filter.on_llm_request()` 钩子 |
+| `core/planner.py` | **新文件**：Planner 类 + recall/save 决策逻辑 + JSON 解析 |
+| `core/config_manager.py` | 替换 `force_memory_recall` → `recall_mode`/`save_mode`/`recall_planner_provider`/`save_planner_provider` |
+| `main.py` | 重构 `_on_llm_request_*` → planner-based 实现；新增 `_do_recall`/`_do_save` 方法 |
+| `_conf_schema.json` | 新增 4 个配置项（含 `_special: select_provider` 提供商标识） |
 
 ---
 

@@ -27,6 +27,7 @@ from quart import jsonify, request
 
 from .core.config_manager import ConfigManager
 from .core.everos_client import EverOSClient
+from .core.planner import Planner
 from .core.standalone_server import StandaloneServer
 from .tools import everos_tools as everos_tools_module
 from .tools.everos_tools import EverOSLearnTool, EverOSMemorizeTool, EverOSRecallTool
@@ -92,6 +93,7 @@ class EverOSIntegrationPlugin(Star):
         self._tools_registered = False
         self._healthy = False
         self._standalone_server: StandaloneServer | None = None
+        self._planner: Planner | None = None  # 延迟初始化，在 _initialize 中创建
         self._known_user_ids: set[str] = set()  # 追踪聊天中出现的真实用户 ID
         self._known_users_path = Path(self.data_dir) / KNOWN_USERS_FILE
 
@@ -432,6 +434,9 @@ class EverOSIntegrationPlugin(Star):
             if self.config.enable_tools and self._healthy:
                 self._register_tools()
 
+            # 初始化 Planner（recall/save 决策，在主 LLM 思索链之前运行）
+            self._planner = Planner(self)
+
         except Exception as e:
             logger.error(f"EverOS Integration 初始化失败: {e}", exc_info=True)
 
@@ -542,52 +547,144 @@ class EverOSIntegrationPlugin(Star):
                     base.append(uid)
         return base
 
-    # ─── 强制记忆检索（RAG 预处理）────────────────────────────────
+    # ─── 记忆检索 / 保存决策（思索链之前）────────────────────────
 
     @filter.on_llm_request()
-    async def _on_llm_request_pre_recall(
+    async def _on_llm_request_planner(
         self, event: AstrMessageEvent, req: ProviderRequest
     ) -> None:
-        """在 LLM 被调用前，强制检索 EverOS 记忆并注入上下文。
+        """在 LLM 思索链之前完成 recall + save 决策。
 
-        当 ``force_memory_recall`` 配置开启时，自动以用户消息内容为
-        查询词检索 EverOS 记忆库。检索到的记忆会注入到系统提示词中，
-        让 LLM 在思考前先「看到」相关历史上下文。
-
-        未检索到任何记忆时，不修改系统提示词（静默跳过），
-        LLM 按正常流程思考。
+        recall_mode / save_mode 可选值：off / force / planner。
+        planner 模式使用配置的 LLM 提供商做轻量决策（超时 5s 兜底），
+        决策发生在主 LLM 调用之前，不增加用户感知延迟。
         """
-        if not self.config.force_memory_recall:
-            return
         if not self._client or not self._healthy:
             return
 
-        # 提取用户查询：优先 req.prompt，其次 contexts 中最后一条 user 消息
-        query = (req.prompt or "").strip()
-        if not query:
-            try:
-                for msg in reversed(req.contexts or []):
-                    if isinstance(msg, dict) and msg.get("role") == "user":
-                        content = msg.get("content", "")
-                        if isinstance(content, str) and content.strip():
-                            query = content.strip()
-                            break
-            except Exception:
-                pass
+        query = self._extract_query(req)
         if not query:
             return
 
-        # 从配置中取候选 user_id（首选用当前 event 的 sender_id）
-        tracker_uid = ""
+        # ── Recall 阶段 ──────────────────────────────────────────
+        recall_mode = self.config.recall_mode
+        if recall_mode in ("force", "planner"):
+            await self._do_recall(event, req, query, recall_mode)
+
+        # ── Save 阶段 ────────────────────────────────────────────
+        save_mode = self.config.save_mode
+        if save_mode in ("force", "planner"):
+            await self._do_save(event, query, save_mode)
+
+    # ── Recall 实现 ───────────────────────────────────────────────
+
+    async def _do_recall(
+        self, event: AstrMessageEvent, req: ProviderRequest,
+        query: str, mode: str,
+    ) -> None:
+        """执行记忆检索决策 + 检索 + 注入。"""
+        search_query = query
+        if mode == "planner":
+            try:
+                action, sq = await self._planner.recall_decision(query)
+                if action != "recall":
+                    logger.info(f"[EverOS] Planner(recall): skip, query={query[:50]!r}")
+                    return
+                if sq:
+                    search_query = sq
+            except Exception as e:
+                logger.warning(f"[EverOS] Planner(recall): 异常回退 force: {e}")
+
+        memories = await self._search_memories(event, search_query)
+        if not memories:
+            return
+
+        recall_block = self._render_memory_block(memories)
+        req.system_prompt = (req.system_prompt or "") + "\n" + recall_block
+        logger.info(
+            f"[EverOS] Recall({mode}): query={search_query[:50]!r}, "
+            f"found={len(memories)}, injected"
+        )
+
+    # ── Save 实现 ─────────────────────────────────────────────────
+
+    async def _do_save(
+        self, event: AstrMessageEvent, query: str, mode: str,
+    ) -> None:
+        """执行记忆保存决策 + 写入。"""
+        if mode == "planner":
+            try:
+                action, content = await self._planner.save_decision(query)
+                if action != "save" or not content.strip():
+                    logger.info(f"[EverOS] Planner(save): skip, query={query[:50]!r}")
+                    return
+            except Exception as e:
+                logger.warning(f"[EverOS] Planner(save): 异常，跳过: {e}")
+                return
+        else:
+            # force 模式：直接保存用户消息内容
+            content = query
+
         try:
-            tracker_uid = str(event.get_sender_id()) if event.get_sender_id() else ""
+            tracker_uid = self._get_tracker_uid(event)
+            ts = int(time.time() * 1000)
+            await self._client.memory_add(
+                session_id=f"planner-save-{ts}",
+                messages=[{
+                    "sender_id": tracker_uid or "default",
+                    "role": "user",
+                    "timestamp": ts,
+                    "content": content.strip(),
+                }],
+                app_id=self.config.app_id,
+                project_id=self.config.project_id,
+            )
+            await self._client.memory_flush(
+                session_id=f"planner-save-{ts}",
+                app_id=self.config.app_id,
+                project_id=self.config.project_id,
+            )
+            logger.info(
+                f"[EverOS] Save({mode}): content={content[:80]!r}, "
+                f"user={tracker_uid}"
+            )
+        except Exception as e:
+            logger.warning(f"[EverOS] Save: 写入失败: {e}")
+
+    # ── 工具方法 ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _extract_query(req: ProviderRequest) -> str:
+        """从 ProviderRequest 中提取用户查询文本。"""
+        query = (req.prompt or "").strip()
+        if query:
+            return query
+        try:
+            for msg in reversed(req.contexts or []):
+                if isinstance(msg, dict) and msg.get("role") == "user":
+                    content = msg.get("content", "")
+                    if isinstance(content, str) and content.strip():
+                        return content.strip()
         except Exception:
             pass
+        return ""
+
+    @staticmethod
+    def _get_tracker_uid(event: AstrMessageEvent) -> str:
+        try:
+            return str(event.get_sender_id()) if event.get_sender_id() else ""
+        except Exception:
+            return ""
+
+    async def _search_memories(
+        self, event: AstrMessageEvent, query: str,
+    ) -> list[dict]:
+        """检索记忆，返回去重后的列表。"""
+        tracker_uid = self._get_tracker_uid(event)
         candidate_uids = self._get_candidate_uids()
         if tracker_uid and tracker_uid not in candidate_uids:
             candidate_uids.insert(0, tracker_uid)
 
-        # 检索记忆
         memories: list[dict] = []
         seen_ids: set[str] = set()
         for uid in candidate_uids:
@@ -611,11 +708,10 @@ class EverOSIntegrationPlugin(Star):
                     break
             except Exception:
                 continue
+        return memories
 
-        if not memories:
-            return  # 无记忆 → 静默跳过，LLM 正常思考
-
-        # 渲染记忆片段
+    @staticmethod
+    def _render_memory_block(memories: list[dict]) -> str:
         lines = [
             "",
             "[EverOS 记忆检索结果 — 请在回答时参考以下上下文]",
@@ -631,19 +727,12 @@ class EverOSIntegrationPlugin(Star):
             )
             if not content:
                 continue
-            # 截断过长的内容
-            content = content[:300] + ("..." if len(str(content)) > 300 else "")
+            content = str(content)[:300]
+            if len(str(content)) >= 300:
+                content += "..."
             lines.append(f"{i}. [{mtype}] {content}")
-
         lines.append("[/EverOS 记忆检索结果]")
-        recall_block = "\n".join(lines)
-
-        # 注入到 system_prompt 末尾（在工具定义之后，对话开始之前）
-        req.system_prompt = (req.system_prompt or "") + "\n" + recall_block
-        logger.info(
-            f"[EverOS] 强制记忆检索: query={query[:50]!r}, "
-            f"found={len(memories)}, injected_to_system_prompt"
-        )
+        return "\n".join(lines)
 
     @filter.command_group("everos")
     def everos(self):

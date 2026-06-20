@@ -18,8 +18,14 @@ _DEFAULTS: dict[str, Any] = {
     # EverOS 边界检测阈值（与 EverOS default.toml [boundary_detection] 保持一致）
     "boundary_token_limit": 65536,
     "boundary_msg_limit": 500,
-    # 强制 LLM 在思考前先检索记忆（RAG 预处理）
-    "force_memory_recall": False,
+    # 记忆检索决策模式：off=关闭, force=强制检索, planner=LLM决策
+    "recall_mode": "off",
+    # 记忆检索决策 LLM 提供商（空=使用主提供商）
+    "recall_planner_provider": "",
+    # 记忆保存决策模式：off=关闭, force=强制, planner=LLM决策
+    "save_mode": "off",
+    # 记忆保存决策 LLM 提供商（空=使用主提供商）
+    "save_planner_provider": "",
 }
 
 
@@ -71,9 +77,24 @@ class ConfigManager:
         return int(self.get("boundary_msg_limit", 500))
 
     @property
-    def force_memory_recall(self) -> bool:
-        """是否在 LLM 思考前强制检索 EverOS 记忆（RAG 预处理）。"""
-        return bool(self.get("force_memory_recall", False))
+    def recall_mode(self) -> str:
+        """记忆检索决策模式: off / force / planner。"""
+        return str(self.get("recall_mode", "off"))
+
+    @property
+    def recall_planner_provider(self) -> str:
+        """记忆检索决策使用的 LLM 提供商 ID（空=使用主提供商）。"""
+        return str(self.get("recall_planner_provider", ""))
+
+    @property
+    def save_mode(self) -> str:
+        """记忆保存决策模式: off / force / planner。"""
+        return str(self.get("save_mode", "off"))
+
+    @property
+    def save_planner_provider(self) -> str:
+        """记忆保存决策使用的 LLM 提供商 ID（空=使用主提供商）。"""
+        return str(self.get("save_planner_provider", ""))
 
     @property
     def isolation_personas(self) -> list[str]:
